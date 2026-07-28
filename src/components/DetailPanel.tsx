@@ -114,7 +114,7 @@ function CitationModal({ node, onClose }: { node: GraphNode; onClose: () => void
   );
 }
 
-function PaperPopup({ node, onClose, isRightPanelCollapsed }: { node: GraphNode; onClose: () => void; isRightPanelCollapsed?: boolean }) {
+function PaperPopup({ node, onClose, isRightPanelCollapsed, panelWidth }: { node: GraphNode; onClose: () => void; isRightPanelCollapsed?: boolean; panelWidth?: number }) {
   const [notes, setNotes] = useState('');
   const [isSaving, setIsSaving] = useState(false);
   const [showSaved, setShowSaved] = useState(false);
@@ -122,7 +122,8 @@ function PaperPopup({ node, onClose, isRightPanelCollapsed }: { node: GraphNode;
   const { graphData, tags } = useGraphStore();
   const [localTags, setLocalTags] = useState<string[]>((node as any).localTags || []);
   const [hasMovedManually, setHasMovedManually] = useState(false);
-  const [pos, setPos] = useState({ x: typeof window !== 'undefined' ? Math.max(360, window.innerWidth - (isRightPanelCollapsed ? 446 : 822)) : 300, y: 80 });
+  const pw = panelWidth || 360;
+  const [pos, setPos] = useState({ x: typeof window !== 'undefined' ? Math.max(360, window.innerWidth - (isRightPanelCollapsed ? 446 : pw + 462)) : 300, y: 80 });
   const dragRef = useRef<{ startX: number; startY: number; originX: number; originY: number } | null>(null);
 
   // Reset state when a NEW node is selected
@@ -131,19 +132,21 @@ function PaperPopup({ node, onClose, isRightPanelCollapsed }: { node: GraphNode;
     setLocalTags((node as any).localTags || []);
     setHasMovedManually(false);
     if (typeof window !== 'undefined') {
-      setPos({ x: Math.max(360, window.innerWidth - (isRightPanelCollapsed ? 446 : 822)), y: 80 });
+      const currentPw = panelWidth || 360;
+      setPos({ x: Math.max(360, window.innerWidth - (isRightPanelCollapsed ? 446 : currentPw + 462)), y: 80 });
     }
     // We intentionally omit isRightPanelCollapsed here so that toggling the panel
     // doesn't completely reset the popup's Y position or wipe the user's manual drag state.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [node]);
+  }, [node, panelWidth]);
 
   // Track the panel sliding if the user hasn't manually ripped it away yet
   useEffect(() => {
     if (!hasMovedManually && typeof window !== 'undefined') {
-      setPos(prev => ({ ...prev, x: Math.max(360, window.innerWidth - (isRightPanelCollapsed ? 446 : 822)) }));
+      const currentPw = panelWidth || 360;
+      setPos(prev => ({ ...prev, x: Math.max(360, window.innerWidth - (isRightPanelCollapsed ? 446 : currentPw + 462)) }));
     }
-  }, [isRightPanelCollapsed, hasMovedManually]);
+  }, [isRightPanelCollapsed, hasMovedManually, panelWidth]);
 
   const getDisplayCitationCount = (n: GraphNode) => {
     const loadedCount = graphData.links.filter(l =>
@@ -727,6 +730,9 @@ export default function DetailPanel() {
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [splitRatio, setSplitRatio] = useState(50);
   const [showNotesCompendium, setShowNotesCompendium] = useState(false);
+  const [panelWidth, setPanelWidth] = useState(360);
+  const [viewMode, setViewMode] = useState<'collection' | 'related' | 'split'>('collection');
+  const [showTools, setShowTools] = useState(false);
 
   const scrollPositionRef = useRef<number>(0);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -734,6 +740,27 @@ export default function DetailPanel() {
   const collectionHeaderRef = useRef<HTMLDivElement>(null);
   const relatedHeaderRef = useRef<HTMLDivElement>(null);
   const isDraggingSplit = useRef(false);
+  const isDraggingResize = useRef(false);
+
+  const onMouseDownResize = (e: React.MouseEvent) => {
+    e.preventDefault();
+    isDraggingResize.current = true;
+    
+    const onMouseMove = (moveEvent: MouseEvent) => {
+      if (!isDraggingResize.current) return;
+      const newWidth = window.innerWidth - moveEvent.clientX - 16;
+      setPanelWidth(Math.max(320, Math.min(newWidth, 700)));
+    };
+    
+    const onMouseUp = () => {
+      isDraggingResize.current = false;
+      document.removeEventListener('mousemove', onMouseMove);
+      document.removeEventListener('mouseup', onMouseUp);
+    };
+    
+    document.addEventListener('mousemove', onMouseMove);
+    document.addEventListener('mouseup', onMouseUp);
+  };
 
   const onMouseDownSplit = (e: React.MouseEvent) => {
     e.preventDefault();
@@ -881,6 +908,72 @@ export default function DetailPanel() {
     return Math.round(100 * Math.log(val) / Math.log(maxEdges));
   };
 
+  const renderToolsDrawer = () => {
+    if (!showTools) return null;
+    return (
+      <div style={{
+        display: 'flex', flexDirection: 'column', gap: '0.75rem',
+        padding: '0.75rem', background: 'var(--bg-background)',
+        borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)',
+        marginTop: '0.25rem'
+      }}>
+        {tags.length > 0 && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+            <label style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Filter by Tags</label>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.25rem' }}>
+              {tags.map(tag => {
+                const isActive = tagFilter.includes(tag.id);
+                return (
+                  <button 
+                    key={tag.id}
+                    onClick={() => toggleTagFilter(tag.id)}
+                    style={{
+                      padding: '0.2rem 0.5rem',
+                      background: isActive ? tag.color : 'transparent',
+                      color: isActive ? '#fff' : 'var(--text-primary)',
+                      border: `1px solid ${tag.color}`,
+                      borderRadius: '12px',
+                      fontSize: '0.75rem',
+                      cursor: 'pointer',
+                      transition: 'all 0.2s',
+                      display: 'flex', alignItems: 'center', gap: '0.25rem'
+                    }}
+                  >
+                    {!isActive && <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: tag.color }} />}
+                    {tag.name}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+        {allCollectionNodes.length > 0 && (
+          <>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+              <label style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Bulk Actions</label>
+              <BulkActionsPanel />
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                <label style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Minimum Connections</label>
+                <span style={{ fontSize: '0.8rem', fontWeight: 'bold', color: 'var(--accent-primary)' }}>{edgeFilter}</span>
+              </div>
+              <input
+                type="range"
+                min={useLogScale ? 0 : 1}
+                max={useLogScale ? 100 : maxEdges}
+                step="1"
+                value={valueToStep(edgeFilter)}
+                onChange={(e) => setEdgeFilter(stepToValue(parseInt(e.target.value)))}
+                style={{ width: '100%', cursor: 'pointer' }}
+              />
+            </div>
+          </>
+        )}
+      </div>
+    );
+  };
+
   if (!activeCollectionId) return null;
 
   return (
@@ -889,7 +982,7 @@ export default function DetailPanel() {
         <div className="glass-panel" style={{
           position: 'fixed',
           top: '1.5rem',
-          right: isCollapsed ? '50px' : '390px',
+          right: isCollapsed ? '50px' : `${panelWidth + 30}px`,
           padding: '1rem 1.5rem',
           borderRadius: 'var(--radius-lg)',
           background: 'var(--bg-surface)',
@@ -929,7 +1022,7 @@ export default function DetailPanel() {
       {/* Sidebar — wrapper for toggle animation */}
       <div style={{
         position: 'absolute',
-        right: isCollapsed ? '-360px' : '1rem',
+        right: isCollapsed ? `${-panelWidth}px` : '1rem',
         top: '1rem',
         bottom: '1rem',
         display: 'flex',
@@ -951,236 +1044,155 @@ export default function DetailPanel() {
         </button>
         
         <div className="glass-panel" ref={containerRef} style={{
-          width: '360px',
+          width: `${panelWidth}px`,
           height: '100%',
           padding: '1.5rem',
           borderRadius: 'var(--radius-lg)',
           display: 'flex',
           flexDirection: 'column',
           gap: 0,
-          overflow: 'hidden'
+          overflow: 'hidden',
+          position: 'relative'
         }}>
-          {/* Tags Filter */}
-          {tags.length > 0 && (
-            <div style={{ flexShrink: 0, display: 'flex', flexDirection: 'column', gap: '0.5rem', paddingBottom: '1rem', borderBottom: '1px solid var(--border-subtle)', marginBottom: '1rem' }}>
-              <label style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Filter by Tags</label>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.25rem' }}>
-                {tags.map(tag => {
-                  const isActive = tagFilter.includes(tag.id);
-                  return (
-                    <button 
-                      key={tag.id}
-                      onClick={() => toggleTagFilter(tag.id)}
-                      style={{
-                        padding: '0.2rem 0.5rem',
-                        background: isActive ? tag.color : 'transparent',
-                        color: isActive ? '#fff' : 'var(--text-primary)',
-                        border: `1px solid ${tag.color}`,
-                        borderRadius: '12px',
-                        fontSize: '0.75rem',
-                        cursor: 'pointer',
-                        transition: 'all 0.2s',
-                        display: 'flex', alignItems: 'center', gap: '0.25rem'
-                      }}
-                    >
-                      {!isActive && <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: tag.color }} />}
-                      {tag.name}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          )}
+          {/* Resize Drag Handle */}
+          <div
+            onMouseDown={onMouseDownResize}
+            style={{
+              position: 'absolute',
+              left: 0,
+              top: 0,
+              bottom: 0,
+              width: '8px',
+              cursor: 'col-resize',
+              zIndex: 20,
+              background: 'transparent'
+            }}
+            title="Drag to resize sidebar"
+          />
+
+          {/* Top Navigation Bar */}
+          <div style={{ flexShrink: 0, display: 'flex', gap: '0.25rem', background: 'var(--bg-surface-hover)', padding: '0.25rem', borderRadius: 'var(--radius-md)', borderBottom: '1px solid var(--border-subtle)', paddingBottom: '0.75rem', marginBottom: '0.75rem', width: '100%' }}>
+            <button
+              onClick={() => setViewMode('collection')}
+              style={{
+                flex: 1, padding: '0.4rem 0.5rem', borderRadius: 'var(--radius-sm)',
+                background: viewMode === 'collection' ? 'var(--bg-surface)' : 'transparent',
+                color: viewMode === 'collection' ? 'var(--text-primary)' : 'var(--text-secondary)',
+                border: viewMode === 'collection' ? '1px solid var(--border-strong)' : 'none',
+                fontWeight: viewMode === 'collection' ? 600 : 400,
+                cursor: 'pointer', fontSize: '0.8rem',
+                boxShadow: viewMode === 'collection' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
+                transition: 'all 0.2s', whiteSpace: 'nowrap'
+              }}
+            >
+              📚 Collection ({collectionNodes.length})
+            </button>
+            <button
+              onClick={() => setViewMode('related')}
+              style={{
+                flex: 1, padding: '0.4rem 0.5rem', borderRadius: 'var(--radius-sm)',
+                background: viewMode === 'related' ? 'var(--bg-surface)' : 'transparent',
+                color: viewMode === 'related' ? 'var(--text-primary)' : 'var(--text-secondary)',
+                border: viewMode === 'related' ? '1px solid var(--border-strong)' : 'none',
+                fontWeight: viewMode === 'related' ? 600 : 400,
+                cursor: 'pointer', fontSize: '0.8rem',
+                boxShadow: viewMode === 'related' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
+                transition: 'all 0.2s', whiteSpace: 'nowrap'
+              }}
+            >
+              🔗 Related ({allRelatedNodes.length})
+            </button>
+            <button
+              onClick={() => setViewMode('split')}
+              title="Split side-by-side view"
+              style={{
+                padding: '0.4rem 0.65rem', borderRadius: 'var(--radius-sm)',
+                background: viewMode === 'split' ? 'var(--bg-surface)' : 'transparent',
+                color: viewMode === 'split' ? 'var(--text-primary)' : 'var(--text-secondary)',
+                border: viewMode === 'split' ? '1px solid var(--border-strong)' : 'none',
+                fontWeight: viewMode === 'split' ? 600 : 400,
+                cursor: 'pointer', fontSize: '0.8rem',
+                boxShadow: viewMode === 'split' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
+                transition: 'all 0.2s'
+              }}
+            >
+              🔀
+            </button>
+          </div>
 
           {/* Collection Section */}
-          <div style={{ display: 'flex', flexDirection: 'column', height: `${splitRatio}%`, minHeight: 0 }}>
-            <div ref={collectionHeaderRef} style={{ flexShrink: 0, display: 'flex', flexDirection: 'column', gap: '0.75rem', marginBottom: '1rem' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                <div>
-                  <h2 style={{ fontSize: '1.2rem', fontWeight: 600, color: 'var(--text-primary)' }}>
-                    Collection Papers
-                  </h2>
-                  <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
-                    {collectionNodes.length} papers in this collection
-                  </p>
-                </div>
-                <button
-                  onClick={() => setShowNotesCompendium(true)}
-                  style={{
-                    padding: '0.3rem 0.6rem', fontSize: '0.75rem', borderRadius: 'var(--radius-sm)',
-                    background: 'var(--bg-surface-hover)', border: '1px solid var(--border-strong)',
-                    color: 'var(--text-primary)', cursor: 'pointer', whiteSpace: 'nowrap'
-                  }}
-                >
-                  Notes Compendium
-                </button>
-              </div>
-
-              {allCollectionNodes.length > 0 && (
-                <>
-                  <SearchInput
-                    value={collectionFilter}
-                    onChange={(v) => setCollectionFilter(v)}
-                    placeholder="Search collection papers..."
-                    storageKey="detail-collection-filter"
-                    style={{ width: '100%' }}
-                  />
-                  <BulkActionsPanel />
-                </>
-              )}
-
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', padding: '0.75rem', background: 'var(--bg-surface-hover)', borderRadius: 'var(--radius-md)' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <label style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Minimum Connections</label>
-                  <span style={{ fontSize: '0.85rem', fontWeight: 'bold', color: 'var(--accent-primary)' }}>{edgeFilter}</span>
-                </div>
-                <input
-                  type="range"
-                  min={useLogScale ? 0 : 1}
-                  max={useLogScale ? 100 : maxEdges}
-                  step="1"
-                  value={valueToStep(edgeFilter)}
-                  onChange={(e) => setEdgeFilter(stepToValue(parseInt(e.target.value)))}
-                  style={{ width: '100%', cursor: 'pointer' }}
-                />
-              </div>
-            </div>
-
-            <div
-              ref={scrollContainerRef}
-              onScroll={(e) => { scrollPositionRef.current = e.currentTarget.scrollTop; }}
-              style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '0.75rem', paddingRight: '0.5rem' }}
-            >
-              {collectionNodes.map(node => (
-                <div key={node.id}
-                  onClick={() => setSelectedNode(selectedNode?.id === node.id ? null : node)}
-                  style={{
-                    padding: '0.75rem', background: 'var(--bg-surface)',
-                    borderRadius: 'var(--radius-md)', 
-                    border: selectedNode?.id === node.id ? '2px solid var(--accent-primary)' : '1px solid var(--border-subtle)',
-                    cursor: 'pointer'
-                  }}
-                >
-                  <h3 title={selectedNode?.id === node.id ? undefined : node.title} style={{ fontSize: '0.9rem', marginBottom: '0.25rem', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{node.title}</h3>
-                  {((node as any).localTags && (node as any).localTags.length > 0) && (
-                    <div style={{ display: 'flex', gap: '0.25rem', flexWrap: 'wrap', marginTop: '0.25rem' }}>
-                      {((node as any).localTags as string[])
-                         .map(tid => tags.find(t => t.id === tid))
-                         .filter(Boolean)
-                         .map(t => (
-                           <span key={t!.id} style={{ fontSize: '0.65rem', padding: '0.1rem 0.3rem', borderRadius: '4px', background: t!.color + '40', color: 'var(--text-primary)', border: `1px solid ${t!.color}` }}>{t!.name}</span>
-                         ))
-                      }
-                    </div>
-                  )}
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '0.5rem' }}>
-                    <span style={{ fontSize: '0.75rem', color: 'var(--text-tertiary)' }}>
-                      {node.year} • {getDisplayCitationCount(node)} citations
-                    </span>
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        if (window.confirm("Are you sure you want to remove this paper from your collection?")) {
-                          useGraphStore.getState().removeNode(node.id);
-                        }
-                      }}
-                      style={{
-                        padding: '0.25rem 0.5rem', background: 'transparent',
-                        color: '#ef4444', border: '1px solid #ef4444',
-                        borderRadius: 'var(--radius-sm)', cursor: 'pointer', fontSize: '0.75rem'
-                      }}
-                    >
-                      Remove
-                    </button>
+          {(viewMode === 'collection' || viewMode === 'split') && (
+            <div style={{ display: 'flex', flexDirection: 'column', height: viewMode === 'split' ? `${splitRatio}%` : '100%', minHeight: 0 }}>
+              <div ref={collectionHeaderRef} style={{ flexShrink: 0, display: 'flex', flexDirection: 'column', gap: '0.75rem', marginBottom: '1rem' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                  <div>
+                    <h2 style={{ fontSize: '1.2rem', fontWeight: 600, color: 'var(--text-primary)' }}>
+                      Collection Papers
+                    </h2>
+                    <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+                      {collectionNodes.length} papers in this collection
+                    </p>
                   </div>
-                </div>
-              ))}
-              {allCollectionNodes.length === 0 ? (
-                <div style={{ textAlign: 'center', padding: '2rem 0', color: 'var(--text-tertiary)', fontSize: '0.9rem' }}>
-                  No papers added yet. Search on the left to add some!
-                </div>
-              ) : collectionNodes.length === 0 ? (
-                <div style={{ textAlign: 'center', padding: '2rem 0', color: 'var(--text-tertiary)', fontSize: '0.9rem' }}>
-                  No collection papers match your search.
-                </div>
-              ) : null}
-            </div>
-          </div>
-
-          {/* Draggable Divider */}
-          <div
-            onMouseDown={onMouseDownSplit}
-            style={{
-              height: '1.5rem',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              cursor: 'row-resize',
-              margin: '0 -1.5rem',
-              background: 'transparent',
-              position: 'relative',
-              zIndex: 10,
-              flexShrink: 0
-            }}
-          >
-            <div style={{ width: '40px', height: '4px', background: 'var(--border-strong)', borderRadius: '2px' }} />
-          </div>
-
-          {/* Related Section */}
-          <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
-            <div ref={relatedHeaderRef} style={{ flexShrink: 0, display: 'flex', flexDirection: 'column', gap: '0.75rem', marginBottom: '1rem' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>
-                <div>
-                  <h2 style={{ fontSize: '1.2rem', fontWeight: 600, color: 'var(--text-primary)' }}>
-                    Related Papers
-                  </h2>
-                  <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
-                    {allRelatedNodes.length} citations and references
-                  </p>
-                </div>
-                {allRelatedNodes.length > 0 && (
                   <button
-                    onClick={() => useGraphStore.getState().clearRelatedNodes()}
+                    onClick={() => setShowNotesCompendium(true)}
                     style={{
-                      padding: '0.25rem 0.5rem', background: 'transparent',
-                      color: 'var(--text-secondary)', border: '1px solid var(--border-strong)',
-                      borderRadius: 'var(--radius-sm)', cursor: 'pointer', fontSize: '0.75rem'
+                      padding: '0.3rem 0.6rem', fontSize: '0.75rem', borderRadius: 'var(--radius-sm)',
+                      background: 'var(--bg-surface-hover)', border: '1px solid var(--border-strong)',
+                      color: 'var(--text-primary)', cursor: 'pointer', whiteSpace: 'nowrap'
                     }}
                   >
-                    Clear Graph
+                    Notes Compendium
                   </button>
+                </div>
+
+                {allCollectionNodes.length > 0 && (
+                  <>
+                    <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <SearchInput
+                          value={collectionFilter}
+                          onChange={(v) => setCollectionFilter(v)}
+                          placeholder="Search collection papers..."
+                          storageKey="detail-collection-filter"
+                          style={{ width: '100%' }}
+                        />
+                      </div>
+                      <button
+                        onClick={() => setShowTools(!showTools)}
+                        title="Toggle Filters & Bulk Actions"
+                        style={{
+                          padding: '0.4rem 0.65rem', borderRadius: 'var(--radius-md)',
+                          background: showTools || edgeFilter > 1 || tagFilter.length > 0 ? 'var(--accent-primary)' : 'var(--bg-surface-hover)',
+                          color: showTools || edgeFilter > 1 || tagFilter.length > 0 ? 'white' : 'var(--text-primary)',
+                          border: '1px solid var(--border-strong)',
+                          cursor: 'pointer', fontSize: '0.75rem', fontWeight: 500,
+                          display: 'flex', alignItems: 'center', gap: '0.25rem', whiteSpace: 'nowrap',
+                          transition: 'all 0.2s', height: '36px', flexShrink: 0
+                        }}
+                      >
+                        ⚙️ Tools {(edgeFilter > 1 || tagFilter.length > 0) && '•'}
+                      </button>
+                    </div>
+
+                    {/* Collapsible Tools & Filters Drawer */}
+                    {renderToolsDrawer()}
+                  </>
                 )}
               </div>
 
-              <SearchInput
-                value={relatedFilter}
-                onChange={(v) => setRelatedFilter(v)}
-                placeholder="Search title, author, or abstract..."
-                storageKey="detail-related-filter"
-                style={{ width: '100%' }}
-              />
-            </div>
-
-            <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '0.75rem', paddingRight: '0.5rem' }}>
-              {allRelatedNodes.length === 0 ? (
-                <div style={{ textAlign: 'center', padding: '1rem 0', color: 'var(--text-tertiary)', fontSize: '0.85rem' }}>
-                  No related papers. Click a paper to load its citations/references.
-                </div>
-              ) : filteredRelatedNodes.length === 0 ? (
-                <div style={{ textAlign: 'center', padding: '1rem 0', color: 'var(--text-tertiary)', fontSize: '0.85rem' }}>
-                  No related papers match your search.
-                </div>
-              ) : (
-                filteredRelatedNodes.map(node => (
+              <div
+                ref={scrollContainerRef}
+                onScroll={(e) => { scrollPositionRef.current = e.currentTarget.scrollTop; }}
+                style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '0.75rem', paddingRight: 0 }}
+              >
+                {collectionNodes.map(node => (
                   <div key={node.id}
                     onClick={() => setSelectedNode(selectedNode?.id === node.id ? null : node)}
                     style={{
                       padding: '0.75rem', background: 'var(--bg-surface)',
                       borderRadius: 'var(--radius-md)', 
-                      border: selectedNode?.id === node.id 
-                        ? '2px solid var(--accent-primary)' 
-                        : (newlyAddedPapers?.includes(node.id) ? '2px solid var(--status-seed)' : '1px solid var(--border-subtle)'),
-                      cursor: 'pointer', opacity: 0.8
+                      border: selectedNode?.id === node.id ? '2px solid var(--accent-primary)' : '1px solid var(--border-subtle)',
+                      cursor: 'pointer'
                     }}
                   >
                     <h3 title={selectedNode?.id === node.id ? undefined : node.title} style={{ fontSize: '0.9rem', marginBottom: '0.25rem', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{node.title}</h3>
@@ -1202,28 +1214,177 @@ export default function DetailPanel() {
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
-                          useGraphStore.getState().addSeedPaper(node as any);
+                          if (window.confirm("Are you sure you want to remove this paper from your collection?")) {
+                            useGraphStore.getState().removeNode(node.id);
+                          }
                         }}
                         style={{
-                          padding: '0.25rem 0.5rem', background: 'var(--accent-primary)',
-                          color: 'white', border: 'none',
+                          padding: '0.25rem 0.5rem', background: 'transparent',
+                          color: '#ef4444', border: '1px solid #ef4444',
                           borderRadius: 'var(--radius-sm)', cursor: 'pointer', fontSize: '0.75rem'
                         }}
                       >
-                        Add
+                        Remove
                       </button>
                     </div>
                   </div>
-                ))
-              )}
+                ))}
+                {allCollectionNodes.length === 0 ? (
+                  <div style={{ textAlign: 'center', padding: '2rem 0', color: 'var(--text-tertiary)', fontSize: '0.9rem' }}>
+                    No papers added yet. Search on the left to add some!
+                  </div>
+                ) : collectionNodes.length === 0 ? (
+                  <div style={{ textAlign: 'center', padding: '2rem 0', color: 'var(--text-tertiary)', fontSize: '0.9rem' }}>
+                    No collection papers match your search.
+                  </div>
+                ) : null}
+              </div>
             </div>
-          </div>
+          )}
+
+          {/* Draggable Divider */}
+          {viewMode === 'split' && (
+            <div
+              onMouseDown={onMouseDownSplit}
+              style={{
+                height: '1.5rem',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                cursor: 'row-resize',
+                margin: '0 -1.5rem',
+                background: 'transparent',
+                position: 'relative',
+                zIndex: 10,
+                flexShrink: 0
+              }}
+            >
+              <div style={{ width: '40px', height: '4px', background: 'var(--border-strong)', borderRadius: '2px' }} />
+            </div>
+          )}
+
+          {/* Related Section */}
+          {(viewMode === 'related' || viewMode === 'split') && (
+            <div style={{ display: 'flex', flexDirection: 'column', flex: 1, height: viewMode === 'split' ? 'auto' : '100%', minHeight: 0 }}>
+              <div ref={relatedHeaderRef} style={{ flexShrink: 0, display: 'flex', flexDirection: 'column', gap: '0.75rem', marginBottom: '1rem' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>
+                  <div>
+                    <h2 style={{ fontSize: '1.2rem', fontWeight: 600, color: 'var(--text-primary)' }}>
+                      Related Papers
+                    </h2>
+                    <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+                      {allRelatedNodes.length} citations and references
+                    </p>
+                  </div>
+                  {allRelatedNodes.length > 0 && (
+                    <button
+                      onClick={() => useGraphStore.getState().clearRelatedNodes()}
+                      style={{
+                        padding: '0.25rem 0.5rem', background: 'transparent',
+                        color: 'var(--text-secondary)', border: '1px solid var(--border-strong)',
+                        borderRadius: 'var(--radius-sm)', cursor: 'pointer', fontSize: '0.75rem'
+                      }}
+                    >
+                      Clear Graph
+                    </button>
+                  )}
+                </div>
+
+                <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <SearchInput
+                      value={relatedFilter}
+                      onChange={(v) => setRelatedFilter(v)}
+                      placeholder="Search title, author, or abstract..."
+                      storageKey="detail-related-filter"
+                      style={{ width: '100%' }}
+                    />
+                  </div>
+                  <button
+                    onClick={() => setShowTools(!showTools)}
+                    title="Toggle Filters & Bulk Actions"
+                    style={{
+                      padding: '0.4rem 0.65rem', borderRadius: 'var(--radius-md)',
+                      background: showTools || edgeFilter > 1 || tagFilter.length > 0 ? 'var(--accent-primary)' : 'var(--bg-surface-hover)',
+                      color: showTools || edgeFilter > 1 || tagFilter.length > 0 ? 'white' : 'var(--text-primary)',
+                      border: '1px solid var(--border-strong)',
+                      cursor: 'pointer', fontSize: '0.75rem', fontWeight: 500,
+                      display: 'flex', alignItems: 'center', gap: '0.25rem', whiteSpace: 'nowrap',
+                      transition: 'all 0.2s', height: '36px', flexShrink: 0
+                    }}
+                  >
+                    ⚙️ Tools {(edgeFilter > 1 || tagFilter.length > 0) && '•'}
+                  </button>
+                </div>
+
+                {/* Collapsible Tools & Filters Drawer */}
+                {renderToolsDrawer()}
+              </div>
+
+              <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '0.75rem', paddingRight: 0 }}>
+                {allRelatedNodes.length === 0 ? (
+                  <div style={{ textAlign: 'center', padding: '1rem 0', color: 'var(--text-tertiary)', fontSize: '0.85rem' }}>
+                    No related papers. Click a paper to load its citations/references.
+                  </div>
+                ) : filteredRelatedNodes.length === 0 ? (
+                  <div style={{ textAlign: 'center', padding: '1rem 0', color: 'var(--text-tertiary)', fontSize: '0.85rem' }}>
+                    No related papers match your search.
+                  </div>
+                ) : (
+                  filteredRelatedNodes.map(node => (
+                    <div key={node.id}
+                      onClick={() => setSelectedNode(selectedNode?.id === node.id ? null : node)}
+                      style={{
+                        padding: '0.75rem', background: 'var(--bg-surface)',
+                        borderRadius: 'var(--radius-md)', 
+                        border: selectedNode?.id === node.id 
+                          ? '2px solid var(--accent-primary)' 
+                          : (newlyAddedPapers?.includes(node.id) ? '2px solid var(--status-seed)' : '1px solid var(--border-subtle)'),
+                        cursor: 'pointer', opacity: 0.8
+                      }}
+                    >
+                      <h3 title={selectedNode?.id === node.id ? undefined : node.title} style={{ fontSize: '0.9rem', marginBottom: '0.25rem', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{node.title}</h3>
+                      {((node as any).localTags && (node as any).localTags.length > 0) && (
+                        <div style={{ display: 'flex', gap: '0.25rem', flexWrap: 'wrap', marginTop: '0.25rem' }}>
+                          {((node as any).localTags as string[])
+                             .map(tid => tags.find(t => t.id === tid))
+                             .filter(Boolean)
+                             .map(t => (
+                               <span key={t!.id} style={{ fontSize: '0.65rem', padding: '0.1rem 0.3rem', borderRadius: '4px', background: t!.color + '40', color: 'var(--text-primary)', border: `1px solid ${t!.color}` }}>{t!.name}</span>
+                             ))
+                          }
+                        </div>
+                      )}
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '0.5rem' }}>
+                        <span style={{ fontSize: '0.75rem', color: 'var(--text-tertiary)' }}>
+                          {node.year} • {getDisplayCitationCount(node)} citations
+                        </span>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            useGraphStore.getState().addSeedPaper(node as any);
+                          }}
+                          style={{
+                            padding: '0.25rem 0.5rem', background: 'var(--accent-primary)',
+                            color: 'white', border: 'none',
+                            borderRadius: 'var(--radius-sm)', cursor: 'pointer', fontSize: '0.75rem'
+                          }}
+                        >
+                          Add
+                        </button>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          )}
         </div>
     </div>
 
       {/* Floating draggable popup — only when a node is selected */}
       {selectedNode && (
-        <PaperPopup node={selectedNode} onClose={() => setSelectedNode(null)} isRightPanelCollapsed={isCollapsed} />
+        <PaperPopup node={selectedNode} onClose={() => setSelectedNode(null)} isRightPanelCollapsed={isCollapsed} panelWidth={panelWidth} />
       )}
     </>
   );
