@@ -149,31 +149,72 @@ export async function getS2PaperMatch(query: string): Promise<Paper | null> {
   return null;
 }
 
-export async function getS2Citations(paperId: string, limit = 20): Promise<Paper[]> {
-  const url = `${S2_API_URL}/paper/${paperId}/citations?limit=${limit}&fields=${S2_FIELDS}`;
-  const res = await fetchWithBackoff(url);
+export async function getS2Citations(paperId: string, limit = 500, maxTotal = 2000, returnLimit = 2000): Promise<Paper[]> {
+  let allCitations: any[] = [];
+  let offset = 0;
   
-  if (!res.ok) return [];
+  const citationFields = S2_FIELDS.split(',').map(f => `citingPaper.${f}`).join(',');
   
-  const data = await res.json();
-  if (!data || !data.data) return [];
+  while (allCitations.length < maxTotal) {
+    const url = `${S2_API_URL}/paper/${paperId}/citations?limit=${limit}&offset=${offset}&fields=${citationFields}`;
+    const res = await fetchWithBackoff(url);
+    
+    if (!res.ok) break;
+    
+    const data = await res.json();
+    if (!data || !data.data || data.data.length === 0) break;
+    
+    allCitations = allCitations.concat(data.data);
+    
+    if (data.next) {
+      offset = data.next;
+    } else if (data.data.length < limit) {
+      break;
+    } else {
+      offset += limit;
+    }
+  }
   
-  return data.data
+  // Sort by citation count locally to pick the top ones
+  allCitations.sort((a, b) => (b.citingPaper?.citationCount || 0) - (a.citingPaper?.citationCount || 0));
+  allCitations = allCitations.slice(0, returnLimit);
+  
+  return allCitations
     .map((d: any) => d.citingPaper)
     .filter((p: any) => p && p.paperId)
     .map(mapS2ToPaper);
 }
 
-export async function getS2References(paperId: string, limit = 20): Promise<Paper[]> {
-  const url = `${S2_API_URL}/paper/${paperId}/references?limit=${limit}&fields=${S2_FIELDS}`;
-  const res = await fetchWithBackoff(url);
+export async function getS2References(paperId: string, limit = 500, maxTotal = 2000, returnLimit = 500): Promise<Paper[]> {
+  let allReferences: any[] = [];
+  let offset = 0;
   
-  if (!res.ok) return [];
+  const referenceFields = S2_FIELDS.split(',').map(f => `citedPaper.${f}`).join(',');
   
-  const data = await res.json();
-  if (!data || !data.data) return [];
+  while (allReferences.length < maxTotal) {
+    const url = `${S2_API_URL}/paper/${paperId}/references?limit=${limit}&offset=${offset}&fields=${referenceFields}`;
+    const res = await fetchWithBackoff(url);
+    
+    if (!res.ok) break;
+    
+    const data = await res.json();
+    if (!data || !data.data || data.data.length === 0) break;
+    
+    allReferences = allReferences.concat(data.data);
+    
+    if (data.next) {
+      offset = data.next;
+    } else if (data.data.length < limit) {
+      break;
+    } else {
+      offset += limit;
+    }
+  }
   
-  return data.data
+  allReferences.sort((a, b) => (b.citedPaper?.citationCount || 0) - (a.citedPaper?.citationCount || 0));
+  allReferences = allReferences.slice(0, returnLimit);
+  
+  return allReferences
     .map((d: any) => d.citedPaper)
     .filter((p: any) => p && p.paperId)
     .map(mapS2ToPaper);

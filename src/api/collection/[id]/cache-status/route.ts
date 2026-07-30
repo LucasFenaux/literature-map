@@ -72,8 +72,10 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
       }
 
       if (s2Id) {
-         isCitationsFresh = checkCache(`${S2_API_URL}/paper/${s2Id}/citations?limit=20&fields=${S2_FIELDS}`, CACHE_CITATIONS_TTL_MS);
-         isReferencesFresh = checkCache(`${S2_API_URL}/paper/${s2Id}/references?limit=20&fields=${S2_FIELDS}`, CACHE_REFERENCES_TTL_MS);
+         const citationFields = S2_FIELDS.split(',').map(f => `citingPaper.${f}`).join(',');
+         const referenceFields = S2_FIELDS.split(',').map(f => `citedPaper.${f}`).join(',');
+         isCitationsFresh = checkCache(`${S2_API_URL}/paper/${s2Id}/citations?limit=500&offset=0&fields=${citationFields}`, CACHE_CITATIONS_TTL_MS);
+         isReferencesFresh = checkCache(`${S2_API_URL}/paper/${s2Id}/references?limit=500&offset=0&fields=${referenceFields}`, CACHE_REFERENCES_TTL_MS);
       } else {
          if (process.env.SEMANTIC_SCHOLAR_API_KEY) {
            // We enforce S2. If we couldn't get an s2Id, we at least did a title search which would be cached.

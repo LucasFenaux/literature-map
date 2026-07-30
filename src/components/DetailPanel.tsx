@@ -726,13 +726,20 @@ function NotesCompendiumModal({ nodes, onClose }: { nodes: GraphNode[]; onClose:
 }
 
 export default function DetailPanel() {
-  const { selectedNode, setSelectedNode, activeCollectionId, graphData, relatedFilter, setRelatedFilter, collectionFilter, setCollectionFilter, edgeFilter, setEdgeFilter, focusedNodeId, newlyAddedPapers, clearNewlyAddedPapers, tags, tagFilter, toggleTagFilter } = useGraphStore();
+  const { selectedNode, setSelectedNode, activeCollectionId, graphData, relatedFilter, setRelatedFilter, collectionFilter, setCollectionFilter, edgeFilter, setEdgeFilter, syncSettings, focusedNodeId, newlyAddedPapers, clearNewlyAddedPapers, tags, tagFilter, toggleTagFilter } = useGraphStore();
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [splitRatio, setSplitRatio] = useState(50);
   const [showNotesCompendium, setShowNotesCompendium] = useState(false);
   const [panelWidth, setPanelWidth] = useState(360);
   const [viewMode, setViewMode] = useState<'collection' | 'related' | 'split'>('collection');
   const [showTools, setShowTools] = useState(false);
+
+  useEffect(() => {
+    syncSettings();
+    window.addEventListener('settingsUpdated', syncSettings);
+    return () => window.removeEventListener('settingsUpdated', syncSettings);
+  }, []);
+  const [showHiddenPapers, setShowHiddenPapers] = useState(false);
 
   const scrollPositionRef = useRef<number>(0);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -839,6 +846,8 @@ export default function DetailPanel() {
   const allRelatedNodes = graphData.nodes.filter(n => n.status !== 'seed' && (!visibleIds || visibleIds.has(n.id)));
   
   const filteredRelatedNodes = allRelatedNodes.filter(n => {
+    if (!showHiddenPapers && n.isHidden) return false;
+    
     if (tagFilter.length > 0) {
       const nodeTags = (n as any).localTags || [];
       if (!tagFilter.every(tid => nodeTags.includes(tid))) return false;
@@ -856,7 +865,7 @@ export default function DetailPanel() {
 
   const maxEdges = useMemo(() => {
     const counts = new Map<string, number>();
-    const nodeIds = new Set(graphData.nodes.map(n => n.id));
+    const nodeMap = new Map<string, any>(graphData.nodes.map(n => [n.id, n]));
     const collectionIds = new Set(
       graphData.nodes.filter(n => n.status === 'seed' || n.status === 'collection').map(n => n.id)
     );
@@ -865,7 +874,7 @@ export default function DetailPanel() {
       const sourceId = typeof l.source === 'object' ? (l.source as any).id : l.source;
       const targetId = typeof l.target === 'object' ? (l.target as any).id : l.target;
       
-      if (nodeIds.has(sourceId) && nodeIds.has(targetId)) {
+      if (nodeMap.has(sourceId) && nodeMap.has(targetId)) {
         if (collectionIds.has(targetId)) {
           counts.set(sourceId, (counts.get(sourceId) || 0) + 1);
         }
@@ -877,7 +886,7 @@ export default function DetailPanel() {
 
     let max = 1;
     for (const [id, count] of counts.entries()) {
-      const node = graphData.nodes.find(n => n.id === id);
+      const node = nodeMap.get(id);
       // The edge filter is only applied to NON-SEED nodes,
       // so the max value on the slider should reflect the max of non-seed nodes.
       if (node && node.status !== 'seed') {
@@ -1319,6 +1328,23 @@ export default function DetailPanel() {
 
                 {/* Collapsible Tools & Filters Drawer */}
                 {renderToolsDrawer()}
+
+                {/* Toggle for Hidden Papers */}
+                {allRelatedNodes.filter(n => n.isHidden).length > 0 && (
+                  <label style={{
+                    display: 'flex', alignItems: 'center', gap: '0.5rem',
+                    fontSize: '0.75rem', color: 'var(--text-secondary)',
+                    cursor: 'pointer', padding: '0.25rem 0 0 0'
+                  }}>
+                    <input 
+                      type="checkbox" 
+                      checked={showHiddenPapers}
+                      onChange={(e) => setShowHiddenPapers(e.target.checked)}
+                      style={{ cursor: 'pointer' }}
+                    />
+                    Show {allRelatedNodes.filter(n => n.isHidden).length} hidden papers (from abstract nodes)
+                  </label>
+                )}
               </div>
 
               <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '0.75rem', paddingRight: 0 }}>

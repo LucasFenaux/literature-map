@@ -13,7 +13,7 @@ const ForceGraph2D = dynamic(() => import('react-force-graph-2d'), { ssr: false 
 
 export default function GraphCanvas() {
   const fgRef = useRef<any>(null);
-  const { graphData, setSelectedNode, selectedNode, relatedFilter, collectionFilter, edgeFilter, focusedNodeId, setFocusedNodeId, exploreMode, tagFilter } = useGraphStore();
+  const { graphData, setSelectedNode, selectedNode, relatedFilter, collectionFilter, edgeFilter, topNLimit, focusedNodeId, setFocusedNodeId, exploreMode, tagFilter } = useGraphStore();
   const [dimensions, setDimensions] = useState({ width: 800, height: 600 });
 
   useEffect(() => {
@@ -61,6 +61,13 @@ export default function GraphCanvas() {
     });
     
     let visibleIds = new Set(nodes.map(n => n.id));
+
+    // Hidden nodes (abstracted papers)
+    for (const node of nodes) {
+       if ((node as any).isHidden) {
+          visibleIds.delete(node.id);
+       }
+    }
 
     // Edge Filter
     for (const node of nodes) {
@@ -472,11 +479,24 @@ export default function GraphCanvas() {
     }
   }, [exploreMode]);
 
+  const simulationGraphData = useMemo(() => {
+    const simNodes = graphData.nodes.filter(n => !(n as any).isHidden);
+    const simNodeIds = new Set(simNodes.map(n => n.id));
+    const simLinks = graphData.links.filter(l => {
+        const sourceId = typeof l.source === 'object' ? (l.source as any).id : l.source;
+        const targetId = typeof l.target === 'object' ? (l.target as any).id : l.target;
+        return simNodeIds.has(sourceId) && simNodeIds.has(targetId);
+    });
+    return { nodes: simNodes, links: simLinks };
+  }, [graphData.nodes, graphData.links, topNLimit]);
+
+  const nodeMap = useMemo(() => new Map<string, any>(graphData.nodes.map(n => [n.id, n])), [graphData.nodes]);
+
   return (
     <div style={{ width: '100vw', height: '100vh', background: 'var(--bg-base)' }}>
       <ForceGraph2D
         ref={fgRef}
-        graphData={graphData}
+        graphData={simulationGraphData}
         nodeVisibility={(node: any) => visibleNodeIds.has(node.id)}
         linkVisibility={(link: any) => {
           const sourceId = typeof link.source === 'object' ? link.source.id : link.source;
@@ -484,8 +504,8 @@ export default function GraphCanvas() {
           if (!visibleNodeIds.has(sourceId) || !visibleNodeIds.has(targetId)) return false;
 
           if (!exploreMode) {
-            const sourceObj = typeof link.source === 'object' ? link.source : graphData.nodes.find(n => n.id === link.source);
-            const targetObj = typeof link.target === 'object' ? link.target : graphData.nodes.find(n => n.id === link.target);
+            const sourceObj = typeof link.source === 'object' ? link.source : nodeMap.get(link.source);
+            const targetObj = typeof link.target === 'object' ? link.target : nodeMap.get(link.target);
             const isSourceCollection = sourceObj?.status === 'seed' || sourceObj?.status === 'collection';
             const isTargetCollection = targetObj?.status === 'seed' || targetObj?.status === 'collection';
             
@@ -634,8 +654,8 @@ export default function GraphCanvas() {
           ctx.fill();
         }}
         linkColor={(link: any) => {
-          const sourceObj = typeof link.source === 'object' ? link.source : graphData.nodes.find(n => n.id === link.source);
-          const targetObj = typeof link.target === 'object' ? link.target : graphData.nodes.find(n => n.id === link.target);
+          const sourceObj = typeof link.source === 'object' ? link.source : nodeMap.get(link.source);
+          const targetObj = typeof link.target === 'object' ? link.target : nodeMap.get(link.target);
           
           if (selectedNode) {
             if (sourceObj?.id === selectedNode.id) return '#ec4899'; // Pink – selected paper references the other
@@ -660,8 +680,8 @@ export default function GraphCanvas() {
           return '#3d4451'; // Tier 3: Default thin slate gray
         }}
         linkWidth={(link: any) => {
-          const sourceObj = typeof link.source === 'object' ? link.source : graphData.nodes.find(n => n.id === link.source);
-          const targetObj = typeof link.target === 'object' ? link.target : graphData.nodes.find(n => n.id === link.target);
+          const sourceObj = typeof link.source === 'object' ? link.source : nodeMap.get(link.source);
+          const targetObj = typeof link.target === 'object' ? link.target : nodeMap.get(link.target);
           
           if (selectedNode) {
             if (sourceObj?.id === selectedNode.id || targetObj?.id === selectedNode.id) return 2.5;

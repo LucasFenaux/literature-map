@@ -38,6 +38,7 @@ export function getDb() {
         abstract TEXT,
         authors TEXT,
         year INTEGER,
+        publicationDate TEXT,
         citationCount INTEGER,
         url TEXT,
         venue TEXT,
@@ -86,10 +87,23 @@ export function getDb() {
       );
     `);
 
+    // Migrations
     try {
-      db.exec(`ALTER TABLE papers ADD COLUMN publicationDate TEXT;`);
-    } catch (error) {
+      db.exec("ALTER TABLE papers ADD COLUMN publicationDate TEXT");
+    } catch (e) {
+      // Column already exists
+    }
+
+    try {
+      db.exec("ALTER TABLE settings ADD COLUMN semanticScholarRateLimit TEXT");
+    } catch (e) {
       // Column likely already exists
+    }
+
+    try {
+      db.exec("CREATE INDEX IF NOT EXISTS idx_papers_collectionId_createdAt ON papers(collectionId, createdAt DESC)");
+    } catch (e) {
+      // Index might already exist
     }
     
     try {

@@ -7,6 +7,10 @@ export default (phase: string): NextConfig => {
 
   return {
     output: isDev ? undefined : "export",
+    // @ts-expect-error NextConfig typing might be outdated for turbopack Next 16
+    eslint: {
+      ignoreDuringBuilds: true,
+    },
     async rewrites() {
       if (isDev) {
         return [

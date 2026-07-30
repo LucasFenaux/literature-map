@@ -61,12 +61,12 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     // If we didn't use S2 (no ID found or no key), or S2 failed but we didn't throw, try OpenAlex natively
     if (!usedS2 && !process.env.SEMANTIC_SCHOLAR_API_KEY) {
       if (type === 'citations' || type === 'both') {
-        citations = await getCitations(id, 20); 
+        citations = await getCitations(id, 200); 
       }
       
       if (type === 'references' || type === 'both') {
         if (!paper) paper = await getPaperDetails(id);
-        const referenceIds = paper?.referencedWorks?.slice(0, 20) || [];
+        const referenceIds = paper?.referencedWorks?.slice(0, 200) || [];
         if (referenceIds.length > 0) {
           references = await getWorksByIds(referenceIds);
         }

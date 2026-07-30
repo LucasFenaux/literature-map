@@ -8,6 +8,7 @@ export interface GraphNode extends Paper {
   val?: number; // size in graph
   status?: string;
   notes?: string;
+  isHidden?: boolean;
 }
 
 export interface GraphLink {
@@ -43,6 +44,7 @@ interface GraphState {
   relatedFilter: string;
   collectionFilter: string;
   edgeFilter: number;
+  topNLimit: number;
   searchResults: Paper[];
   graphData: GraphData;
   selectedNode: GraphNode | null;
@@ -60,7 +62,9 @@ interface GraphState {
   setRelatedFilter: (query: string) => void;
   setCollectionFilter: (query: string) => void;
   setEdgeFilter: (filter: number) => void;
+  setTopNLimit: (limit: number) => void;
   setSearchResults: (results: Paper[]) => void;
+  syncSettings: () => Promise<void>;
   setGraphData: (data: GraphData) => void;
   setSelectedNode: (node: GraphNode | null) => void;
   setFocusedNodeId: (id: string | null) => void;
@@ -84,19 +88,59 @@ interface GraphState {
   deleteTag: (id: string) => Promise<void>;
 }
 
-const calculateSizes = (nodes: GraphNode[], links: GraphLink[]) => {
+const calculateSizes = (nodes: GraphNode[], links: GraphLink[], topNLimit: number = 100, cachedThreshold?: number) => {
   const nodeDegrees: Record<string, number> = {};
+  const seedNodeIds = new Set(nodes.filter(n => n.status === 'seed' || n.status === 'collection').map(n => n.id));
+  const seedEdgeCounts: Record<string, number> = {};
+
   links.forEach(l => {
     const s = typeof l.source === 'string' ? l.source : (l.source as any).id;
     const t = typeof l.target === 'string' ? l.target : (l.target as any).id;
     nodeDegrees[s] = (nodeDegrees[s] || 0) + 1;
     nodeDegrees[t] = (nodeDegrees[t] || 0) + 1;
+
+    if (seedNodeIds.has(s) && !seedNodeIds.has(t)) {
+      seedEdgeCounts[t] = (seedEdgeCounts[t] || 0) + 1;
+    } else if (seedNodeIds.has(t) && !seedNodeIds.has(s)) {
+      seedEdgeCounts[s] = (seedEdgeCounts[s] || 0) + 1;
+    } else if (seedNodeIds.has(t) && seedNodeIds.has(s)) {
+      seedEdgeCounts[s] = (seedEdgeCounts[s] || 0) + 1;
+      seedEdgeCounts[t] = (seedEdgeCounts[t] || 0) + 1;
+    }
   });
 
-  return nodes.map(n => ({
-    ...n,
-    val: (n.status === 'seed' ? 20 : 10) + (nodeDegrees[n.id] || 0) * 2
-  }));
+  const recommendedNodes = nodes.filter(n => n.status !== 'seed' && n.status !== 'collection');
+  
+  let threshold = 1;
+  let validNodes: GraphNode[] = [];
+  
+  if (cachedThreshold !== undefined) {
+    threshold = cachedThreshold;
+    validNodes = recommendedNodes.filter(n => (seedEdgeCounts[n.id] || 0) >= threshold);
+  } else {
+    while (true) {
+      validNodes = recommendedNodes.filter(n => (seedEdgeCounts[n.id] || 0) >= threshold);
+      if (validNodes.length <= topNLimit || validNodes.length === 0) {
+        break;
+      }
+      threshold++;
+    }
+  }
+  
+  const validNodeIds = new Set(validNodes.map(n => n.id));
+
+  nodes.forEach(n => {
+    let isHidden = false;
+    if (n.status !== 'seed' && n.status !== 'collection') {
+       if (!validNodeIds.has(n.id)) {
+         isHidden = true;
+       }
+    }
+    
+    n.isHidden = isHidden;
+    n.val = ((n.status === 'seed' || n.status === 'collection') ? 20 : 10) + (nodeDegrees[n.id] || 0) * 2;
+  });
+  return { nodes, threshold };
 };
 
 export const useGraphStore = create<GraphState>()(
@@ -109,6 +153,7 @@ export const useGraphStore = create<GraphState>()(
       relatedFilter: '',
       collectionFilter: '',
       edgeFilter: 1,
+      topNLimit: 20,
       searchResults: [],
       graphData: { nodes: [], links: [] },
       selectedNode: null,
@@ -125,7 +170,28 @@ export const useGraphStore = create<GraphState>()(
       setSearchQuery: (query) => set({ searchQuery: query }),
       setRelatedFilter: (query) => set({ relatedFilter: query }),
       setCollectionFilter: (query) => set({ collectionFilter: query }),
-      setEdgeFilter: (filter) => set({ edgeFilter: filter }),
+      setEdgeFilter: (edgeFilter) => {
+        const { graphData, topNLimit } = get();
+        const { nodes: sizedNodes, threshold } = calculateSizes(graphData.nodes, graphData.links, topNLimit);
+        set({ edgeFilter: Math.max(edgeFilter, threshold), graphData: { ...graphData, nodes: sizedNodes } });
+      },
+      setTopNLimit: (topNLimit) => {
+        const { graphData, edgeFilter } = get();
+        const { nodes: sizedNodes, threshold } = calculateSizes(graphData.nodes, graphData.links, topNLimit);
+        set({ topNLimit, edgeFilter: Math.max(edgeFilter, threshold), graphData: { ...graphData, nodes: sizedNodes } });
+      },
+      syncSettings: async () => {
+        try {
+          const res = await fetch('/api/settings');
+          const data = await res.json();
+          if (data.maxTopNLimit) {
+            const limit = parseInt(data.maxTopNLimit);
+            get().setTopNLimit(limit);
+          }
+        } catch (e) {
+          console.error(e);
+        }
+      },
       setSearchResults: (results) => set({ searchResults: results }),
       setGraphData: (data) => set({ graphData: data }),
       setSelectedNode: (node) => set({ selectedNode: node }),
@@ -161,10 +227,10 @@ export const useGraphStore = create<GraphState>()(
           const targetId = typeof l.target === 'string' ? l.target : (l.target as any).id;
           return seedIds.has(sourceId) && seedIds.has(targetId);
         });
-        const sizedNodes = calculateSizes(newNodes, newLinks);
-
-        set({
-          graphData: { nodes: sizedNodes, links: newLinks },
+        const { nodes: sizedNodes, threshold } = calculateSizes(newNodes, newLinks, get().topNLimit || 20);
+        set({ 
+          graphData: { nodes: sizedNodes, links: newLinks }, 
+          edgeFilter: Math.max(get().edgeFilter, threshold),
           selectedNode: selectedNode?.status !== 'seed' ? null : selectedNode
         });
       },
@@ -267,15 +333,23 @@ export const useGraphStore = create<GraphState>()(
 
   loadCollectionGraph: async (collectionId: string) => {
     try {
-      const res = await fetch(`/api/collection?collectionId=${collectionId}`);
-      const papers = await res.json();
+      const [res, linksRes] = await Promise.all([
+        fetch(`/api/collection?collectionId=${collectionId}`),
+        fetch(`/api/collection/links?collectionId=${collectionId}`)
+      ]);
       
-      const linksRes = await fetch(`/api/collection/links?collectionId=${collectionId}`);
+      const papers = await res.json();
       const links = await linksRes.json();
       
-      const nodes = calculateSizes(papers, links);
+      const { nodes: sizedNodes, threshold } = calculateSizes(papers, links, get().topNLimit || 20);
       
-      set({ graphData: { nodes, links }, activeCollectionId: collectionId, edgeFilter: 1, clearedNewPapers: [], newlyAddedPapers: null });
+      set({ 
+        graphData: { nodes: sizedNodes, links }, 
+        activeCollectionId: collectionId, 
+        edgeFilter: Math.max(get().edgeFilter, threshold), 
+        clearedNewPapers: [], 
+        newlyAddedPapers: null 
+      });
     } catch (err) {
       console.error('Failed to load collection graph', err);
     }
@@ -292,21 +366,23 @@ export const useGraphStore = create<GraphState>()(
       
       const newNodes = [...graphData.nodes];
       newNodes[existingNodeIndex] = { ...newNodes[existingNodeIndex], status: 'seed' };
-      const sizedNodes = calculateSizes(newNodes, graphData.links);
+      const { nodes: sizedNodes, threshold } = calculateSizes(newNodes, graphData.links, get().topNLimit || 20);
       set({
         graphData: {
           nodes: sizedNodes,
           links: graphData.links,
-        }
+        },
+        edgeFilter: Math.max(get().edgeFilter, threshold)
       });
     } else {
       const newNodes = [...graphData.nodes, { ...paper, status: 'seed' } as GraphNode];
-      const sizedNodes = calculateSizes(newNodes, graphData.links);
+      const { nodes: sizedNodes, threshold } = calculateSizes(newNodes, graphData.links, get().topNLimit || 20);
       set({
         graphData: {
           nodes: sizedNodes,
           links: graphData.links,
-        }
+        },
+        edgeFilter: Math.max(get().edgeFilter, threshold)
       });
     }
 
@@ -343,16 +419,17 @@ export const useGraphStore = create<GraphState>()(
       const targetId = typeof l.target === 'string' ? l.target : (l.target as any).id;
       return sourceId !== id && targetId !== id;
     });
-    const sizedNodes = calculateSizes(newNodes, newLinks);
+    const { nodes: sizedNodes, threshold } = calculateSizes(newNodes, newLinks, get().topNLimit || 20);
 
     set({ 
       graphData: { nodes: sizedNodes, links: newLinks },
+      edgeFilter: Math.max(get().edgeFilter, threshold),
       selectedNode: selectedNode?.id === id ? null : selectedNode
     });
   },
   
   expandNode: async (id: string, type = 'both') => {
-    const { activeCollectionId, exploreMode, graphData } = get();
+    const { activeCollectionId, graphData } = get();
     if (!activeCollectionId) return;
 
     try {
@@ -362,28 +439,35 @@ export const useGraphStore = create<GraphState>()(
       const newNodes = [...graphData.nodes];
       const newLinks = [...graphData.links];
       
+      const existingNodeIds = new Set(newNodes.map(n => n.id));
+      const existingNodeTitles = new Map(newNodes.filter(n => n.title).map(n => [n.title.toLowerCase(), n.id]));
+      const existingLinks = new Set(newLinks.map(l => {
+        const s = l.source && typeof l.source === 'object' ? (l.source as any).id : l.source;
+        const t = l.target && typeof l.target === 'object' ? (l.target as any).id : l.target;
+        return `${s}|${t}`;
+      }));
+
       const addNodesAndLinks = (papers: Paper[], isCitation: boolean) => {
         papers.forEach(p => {
-          const existsInGraph = newNodes.find(n => 
-            n.id === p.id || 
-            (n.title && p.title && n.title.toLowerCase() === p.title.toLowerCase())
-          );
-          
           let targetNodeId = p.id;
-          if (existsInGraph) {
-            targetNodeId = existsInGraph.id;
+          
+          if (existingNodeIds.has(p.id)) {
+            // exists
+          } else if (p.title && existingNodeTitles.has(p.title.toLowerCase())) {
+            targetNodeId = existingNodeTitles.get(p.title.toLowerCase())!;
           } else {
             newNodes.push({ ...p, status: 'recommended' } as any);
+            existingNodeIds.add(p.id);
+            if (p.title) existingNodeTitles.set(p.title.toLowerCase(), p.id);
           }
 
           const source = isCitation ? targetNodeId : id;
           const target = isCitation ? id : targetNodeId;
+          const linkKey = `${source}|${target}`;
           
-          if (!newLinks.find(l => 
-            (typeof l.source === 'string' ? l.source : (l.source as any).id) === source && 
-            (typeof l.target === 'string' ? l.target : (l.target as any).id) === target
-          )) {
+          if (!existingLinks.has(linkKey)) {
             newLinks.push({ source, target });
+            existingLinks.add(linkKey);
           }
         });
       };
@@ -392,8 +476,10 @@ export const useGraphStore = create<GraphState>()(
       if (data.references) addNodesAndLinks(data.references, false);
       
       if (newNodes.length > graphData.nodes.length || newLinks.length > graphData.links.length) {
-        const sizedNodes = calculateSizes(newNodes, newLinks);
-        set({ graphData: { nodes: sizedNodes, links: newLinks } });
+        const isBulk = get().bulkLoading !== null;
+        const cachedThreshold = isBulk ? get().edgeFilter : undefined;
+        const { nodes: sizedNodes, threshold } = calculateSizes(newNodes, newLinks, get().topNLimit || 20, cachedThreshold);
+        set({ graphData: { nodes: sizedNodes, links: newLinks }, edgeFilter: Math.max(get().edgeFilter, threshold) });
       }
     } catch (err) {
       console.error('Failed to expand node', err);
@@ -406,7 +492,7 @@ export const useGraphStore = create<GraphState>()(
     const initialNodes = new Set(graphData.nodes.map(n => n.id));
     
     const nodesToExpand = graphData.nodes
-      .filter(n => n.status === 'seed')
+      .filter(n => n.status === 'seed' || n.status === 'collection')
       .map(n => n.id);
     
     set({ bulkLoading: { type, current: 0, total: nodesToExpand.length } });
@@ -432,7 +518,8 @@ export const useGraphStore = create<GraphState>()(
       await expandNode(nodesToExpand[i], type);
       
       const currentNodes = get().graphData.nodes;
-      const currentNew = currentNodes.map(n => n.id).filter(id => !initialNodes.has(id) && !get().clearedNewPapers.includes(id));
+      const cleared = get().clearedNewPapers || [];
+      const currentNew = currentNodes.map(n => n.id).filter(id => !initialNodes.has(id) && !cleared.includes(id));
       const combinedNew = Array.from(new Set([...existingNewlyAdded, ...currentNew]));
 
       if (combinedNew.length > newlyAdded.length) {
@@ -447,6 +534,10 @@ export const useGraphStore = create<GraphState>()(
       bulkLoading: null,
       newlyAddedPapers: newlyAdded.length > 0 ? newlyAdded : null
     });
+
+    const { graphData: finalGraphData, topNLimit } = get();
+    const { nodes: sizedNodes, threshold } = calculateSizes(finalGraphData.nodes, finalGraphData.links, topNLimit || 20);
+    set({ graphData: { nodes: sizedNodes, links: finalGraphData.links }, edgeFilter: Math.max(get().edgeFilter, threshold) });
   },
 
   rebuildEdges: async () => {
@@ -476,6 +567,7 @@ export const useGraphStore = create<GraphState>()(
       relatedFilter: state.relatedFilter,
       collectionFilter: state.collectionFilter,
       edgeFilter: state.edgeFilter,
+      topNLimit: state.topNLimit,
       newlyAddedPapers: state.newlyAddedPapers,
       tagFilter: state.tagFilter
     }),

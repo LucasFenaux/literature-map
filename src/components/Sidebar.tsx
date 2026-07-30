@@ -23,6 +23,7 @@ export default function Sidebar() {
   const [s2RateLimit, setS2RateLimit] = useState(1);
   const [cacheFreshnessCitations, setCacheFreshnessCitations] = useState('7');
   const [cacheFreshnessReferences, setCacheFreshnessReferences] = useState('30');
+  const [maxTopNLimit, setMaxTopNLimit] = useState('100');
   const [backupStatus, setBackupStatus] = useState('');
   const [isRestoring, setIsRestoring] = useState(false);
   const [s2Usage, setS2Usage] = useState<{ last24h: { api: number; cached: number }; last7d: { api: number; cached: number }; allTime: { api: number; cached: number } } | null>(null);
@@ -59,10 +60,7 @@ export default function Sidebar() {
     tags,
     createTag,
     updateTag,
-    deleteTag,
-    tagFilter,
-    toggleTagFilter,
-    rebuildEdges
+    deleteTag
   } = useGraphStore();
 
   const [isImportingBibtex, setIsImportingBibtex] = useState(false);
@@ -107,6 +105,7 @@ export default function Sidebar() {
       if (data.semanticScholarRateLimit) setS2RateLimit(parseInt(data.semanticScholarRateLimit) || 1);
       if (data.cacheFreshnessCitations) setCacheFreshnessCitations(data.cacheFreshnessCitations);
       if (data.cacheFreshnessReferences) setCacheFreshnessReferences(data.cacheFreshnessReferences);
+      if (data.maxTopNLimit) setMaxTopNLimit(data.maxTopNLimit);
     } catch (e) {
       console.error(e);
     }
@@ -125,7 +124,8 @@ export default function Sidebar() {
           semanticScholarApiKey: s2ApiKey,
           semanticScholarRateLimit: s2RateLimit.toString(),
           cacheFreshnessCitations,
-          cacheFreshnessReferences
+          cacheFreshnessReferences,
+          maxTopNLimit
         })
       });
       window.dispatchEvent(new Event('settingsUpdated'));
@@ -689,6 +689,26 @@ export default function Sidebar() {
               )}
             </div>
             
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginTop: '1rem' }}>
+              <label style={{ fontSize: '0.9rem', fontWeight: 'bold' }}>Global Related Papers Limit</label>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <input
+                  type="number"
+                  min="5"
+                  max="1000"
+                  step="5"
+                  value={maxTopNLimit}
+                  onChange={e => setMaxTopNLimit(e.target.value)}
+                  style={{
+                    flex: 1, padding: '0.5rem',
+                    background: 'var(--bg-panel)', border: '1px solid var(--border-strong)',
+                    color: 'var(--text-primary)', borderRadius: 'var(--radius-md)'
+                  }}
+                />
+                <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>papers</span>
+              </div>
+            </div>
+
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginBottom: '1.5rem', padding: '1rem', background: 'var(--bg-surface-hover)', borderRadius: 'var(--radius-md)' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <label style={{ fontSize: '0.9rem', color: 'var(--text-secondary)' }}>Background Queue Status</label>
