@@ -8,7 +8,7 @@ interface BibtexImportModalProps {
 }
 
 export default function BibtexImportModal({ entries, onClose }: BibtexImportModalProps) {
-  const { activeCollectionId, loadCollectionGraph, graphData } = useGraphStore();
+  const { activeCollectionId, loadCollectionGraph, graphData, addSeedPaper } = useGraphStore();
   const [withDoi, setWithDoi] = useState<any[]>([]);
   const [withoutDoi, setWithoutDoi] = useState<any[]>([]);
   
@@ -239,18 +239,11 @@ export default function BibtexImportModal({ entries, onClose }: BibtexImportModa
 
   const handleSelect = async (paper: Paper) => {
     try {
-      await fetch('/api/collection', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...paper, status: 'seed', collectionId: activeCollectionId })
-      });
-      if (activeCollectionId) {
-        await loadCollectionGraph(activeCollectionId);
-      }
+      await addSeedPaper(paper);
     } catch (e) {
-      console.error(e);
+      console.error('Failed to add paper', e);
     }
-    nextNonDoi();
+    nextNonDoiIndex(currentIndex + 1, withoutDoi);
   };
 
   const handleSkip = () => {

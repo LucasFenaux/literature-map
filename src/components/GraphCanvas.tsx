@@ -129,7 +129,8 @@ export default function GraphCanvas() {
   }, [graphData, relatedFilter, collectionFilter, edgeFilter, focusedNodeId, tagFilter]);
 
   const scaleData = useMemo(() => {
-    if (graphData.nodes.length === 0) return null;
+    const visibleNodes = graphData.nodes.filter(n => visibleNodeIds.has(n.id));
+    if (visibleNodes.length === 0) return null;
     
     const getTimestamp = (n: any) => {
       let t = 0;
@@ -140,7 +141,7 @@ export default function GraphCanvas() {
       return t;
     };
 
-    const timestamps = graphData.nodes.map(getTimestamp);
+    const timestamps = visibleNodes.map(getTimestamp);
     const uniqueTimestamps = Array.from(new Set(timestamps)).sort((a, b) => a - b);
     
     // Logarithmic decay for older outliers (no compression for newer papers)
@@ -175,13 +176,13 @@ export default function GraphCanvas() {
     maxMapped += rangePadding;
 
     const paperYearsSet = new Set<number>();
-    graphData.nodes.forEach(n => {
+    visibleNodes.forEach(n => {
       paperYearsSet.add(new Date(getTimestamp(n)).getUTCFullYear());
     });
     const activeYears = Array.from(paperYearsSet).sort((a, b) => a - b);
 
     return { getTimestamp, getMappedTime, minMapped, maxMapped, activeYears, uniqueTimestamps };
-  }, [graphData.nodes]);
+  }, [graphData.nodes, visibleNodeIds]);
 
   const maxMetrics = useMemo(() => {
     let maxCitations = 1;

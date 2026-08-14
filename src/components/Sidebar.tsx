@@ -27,6 +27,7 @@ export default function Sidebar() {
   const [backupStatus, setBackupStatus] = useState('');
   const [isRestoring, setIsRestoring] = useState(false);
   const [s2Usage, setS2Usage] = useState<{ last24h: { api: number; cached: number }; last7d: { api: number; cached: number }; allTime: { api: number; cached: number } } | null>(null);
+  const [localPdfs, setLocalPdfs] = useState<{id: string, title: string, sizeBytes: number, lastAccessed: string}[] | null>(null);
   
   // Background queue processor
   useEffect(() => {
@@ -113,6 +114,8 @@ export default function Sidebar() {
     setShowSettings(true);
     // Fetch S2 usage
     fetch('/api/settings/s2-usage').then(r => r.json()).then(setS2Usage).catch(() => {});
+    // Fetch Local PDFs
+    fetch('/api/pdf').then(r => r.json()).then(data => setLocalPdfs(data.pdfs || [])).catch(() => {});
   };
 
   const saveSettings = async () => {
@@ -843,6 +846,70 @@ export default function Sidebar() {
                   Clear All Cache
                 </button>
               </div>
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginBottom: '1.5rem', padding: '1rem', background: 'var(--bg-surface-hover)', borderRadius: 'var(--radius-md)' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <label style={{ fontSize: '0.9rem', color: 'var(--text-secondary)' }}>Local PDF Storage</label>
+                <button 
+                  onClick={() => fetch('/api/pdf').then(r => r.json()).then(data => setLocalPdfs(data.pdfs || [])).catch(() => {})}
+                  style={{ padding: '0.25rem 0.5rem', fontSize: '0.75rem', borderRadius: 'var(--radius-sm)', background: 'transparent', border: '1px solid var(--border-strong)', color: 'var(--text-secondary)', cursor: 'pointer' }}
+                >
+                  Refresh
+                </button>
+              </div>
+              <p style={{ fontSize: '0.75rem', color: 'var(--text-tertiary)' }}>
+                PDFs are automatically downloaded when you read them. Files not opened in 30 days are automatically deleted.
+              </p>
+              
+              {localPdfs ? (
+                <div style={{ marginTop: '0.5rem' }}>
+                  <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '0.5rem' }}>
+                    Total Storage: {((localPdfs.reduce((acc, p) => acc + p.sizeBytes, 0)) / (1024 * 1024)).toFixed(1)} MB ({localPdfs.length} files)
+                  </div>
+                  
+                  {localPdfs.length > 0 && (
+                    <div style={{ maxHeight: '150px', overflowY: 'auto', background: 'var(--bg-background)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-subtle)' }}>
+                      {localPdfs.map(pdf => (
+                        <div key={pdf.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.5rem', borderBottom: '1px solid var(--border-subtle)', fontSize: '0.75rem' }}>
+                          <div style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', paddingRight: '0.5rem', color: 'var(--text-primary)' }}>
+                            {pdf.title}
+                          </div>
+                          <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                            <span style={{ color: 'var(--text-tertiary)', whiteSpace: 'nowrap' }}>{(pdf.sizeBytes / 1024 / 1024).toFixed(1)} MB</span>
+                            <button
+                              onClick={async () => {
+                                await fetch(`/api/pdf/${pdf.id}`, { method: 'DELETE' });
+                                fetch('/api/pdf').then(r => r.json()).then(data => setLocalPdfs(data.pdfs || []));
+                              }}
+                              style={{ padding: '0.1rem 0.3rem', background: 'transparent', border: '1px solid #ef4444', color: '#ef4444', borderRadius: 'var(--radius-sm)', cursor: 'pointer', fontSize: '0.7rem' }}
+                            >
+                              Delete
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  
+                  <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.75rem' }}>
+                    <button 
+                      disabled={localPdfs.length === 0}
+                      onClick={async () => {
+                        if (confirm('Delete all cached PDFs?')) {
+                          await fetch('/api/pdf', { method: 'DELETE' });
+                          fetch('/api/pdf').then(r => r.json()).then(data => setLocalPdfs(data.pdfs || []));
+                        }
+                      }}
+                      style={{ flex: 1, padding: '0.5rem', borderRadius: 'var(--radius-md)', background: 'transparent', border: '1px solid #ef4444', color: '#ef4444', cursor: localPdfs.length === 0 ? 'not-allowed' : 'pointer', fontSize: '0.8rem', opacity: localPdfs.length === 0 ? 0.5 : 1 }}
+                    >
+                      Clear All PDFs
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <p style={{ fontSize: '0.8rem', color: 'var(--text-tertiary)' }}>Loading storage stats...</p>
+              )}
             </div>
 
             <div style={{ display: 'flex', gap: '1rem', justifyContent: 'flex-end' }}>

@@ -29,6 +29,8 @@ import * as settingsCacheRoute from '../src/api/settings/cache/route';
 import * as settingsS2UsageRoute from '../src/api/settings/s2-usage/route';
 import * as tagsRoute from '../src/api/tags/route';
 import * as tagsIdRoute from '../src/api/tags/[id]/route';
+import * as pdfRoute from '../src/api/pdf/route';
+import * as pdfIdRoute from '../src/api/pdf/[id]/route';
 
 const app = express();
 app.use(cors());
@@ -55,6 +57,23 @@ app.all('/api/settings/cache', (req, res) => adaptNextRoute(req, res, settingsCa
 app.all('/api/settings/s2-usage', (req, res) => adaptNextRoute(req, res, settingsS2UsageRoute));
 app.all('/api/tags', (req, res) => adaptNextRoute(req, res, tagsRoute));
 app.all('/api/tags/:id', (req, res) => adaptNextRoute(req, res, tagsIdRoute, { id: req.params.id }));
+app.all('/api/pdf', (req, res) => adaptNextRoute(req, res, pdfRoute));
+app.all('/api/pdf/:id', (req, res) => adaptNextRoute(req, res, pdfIdRoute, { id: req.params.id }));
+
+import fs from 'fs';
+app.get('/api/pdf/file/:id', (req, res) => {
+  const id = req.params.id;
+  const s2Id = id.replace('s2:', '');
+  const safeId = s2Id.replace(/[^a-zA-Z0-9_-]/g, '');
+  const pdfPath = path.join(process.cwd(), 'data', 'pdfs', `${safeId}.pdf`);
+  if (fs.existsSync(pdfPath)) {
+    const now = new Date();
+    try { fs.utimesSync(pdfPath, now, now); } catch (e) {}
+    res.sendFile(pdfPath, { dotfiles: 'allow' });
+  } else {
+    res.status(404).send('PDF not found');
+  }
+});
 
 const outPath = path.join(__dirname, '../out');
 app.use(express.static(outPath));
@@ -66,6 +85,26 @@ app.use((req, res) => {
 const port = process.env.DEV_API_PORT || process.env.PORT || 8005;
 app.listen(port, () => {
   console.log(`Standalone server listening on port ${port}`);
-  // Keep the event loop alive
-  setInterval(() => {}, 1000 * 60 * 60);
+  // Run PDF cleanup every 12 hours (delete PDFs not accessed in 30 days)
+  setInterval(() => {
+    try {
+      const pdfDir = path.join(process.cwd(), 'data', 'pdfs');
+      if (fs.existsSync(pdfDir)) {
+        const files = fs.readdirSync(pdfDir);
+        const thirtyDaysAgo = Date.now() - 30 * 24 * 60 * 60 * 1000;
+        files.forEach(f => {
+          if (f.endsWith('.pdf')) {
+            const fp = path.join(pdfDir, f);
+            const stat = fs.statSync(fp);
+            if (stat.mtime.getTime() < thirtyDaysAgo) {
+              fs.unlinkSync(fp);
+              console.log(`Cleaned up old PDF: ${f}`);
+            }
+          }
+        });
+      }
+    } catch (e) {
+      console.error('Auto-cleanup error', e);
+    }
+  }, 1000 * 60 * 60 * 12);
 });

@@ -171,9 +171,10 @@ export const useGraphStore = create<GraphState>()(
       setRelatedFilter: (query) => set({ relatedFilter: query }),
       setCollectionFilter: (query) => set({ collectionFilter: query }),
       setEdgeFilter: (edgeFilter) => {
-        const { graphData, topNLimit } = get();
-        const { nodes: sizedNodes, threshold } = calculateSizes(graphData.nodes, graphData.links, topNLimit);
-        set({ edgeFilter: Math.max(edgeFilter, threshold), graphData: { ...graphData, nodes: sizedNodes } });
+        const { graphData, topNLimit, edgeFilter: currentFilter } = get();
+        if (edgeFilter === currentFilter) return;
+        const { threshold } = calculateSizes(graphData.nodes, graphData.links, topNLimit);
+        set({ edgeFilter: Math.max(edgeFilter, threshold) });
       },
       setTopNLimit: (topNLimit) => {
         const { graphData, edgeFilter } = get();
@@ -392,9 +393,10 @@ export const useGraphStore = create<GraphState>()(
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ...paper, status: 'seed', collectionId: activeCollectionId })
       });
-      if (res.ok) {
-        await get().loadCollectionGraph(activeCollectionId);
-      }
+      // We deliberately do not call loadCollectionGraph here,
+      // because we already optimistically updated the UI graphData above.
+      // Calling loadCollectionGraph replaces the entire nodes array and forces
+      // React Force Graph to freeze the main thread resetting the entire physics simulation.
     } catch (error) {
       console.error('Failed to add seed to DB', error);
     }

@@ -119,6 +119,8 @@ function PaperPopup({ node, onClose, isRightPanelCollapsed, panelWidth }: { node
   const [isSaving, setIsSaving] = useState(false);
   const [showSaved, setShowSaved] = useState(false);
   const [showCitation, setShowCitation] = useState(false);
+  const [isDownloadingPdf, setIsDownloadingPdf] = useState(false);
+  const [pdfDownloaded, setPdfDownloaded] = useState<boolean | null>(null);
   const { graphData, tags } = useGraphStore();
   const [localTags, setLocalTags] = useState<string[]>((node as any).localTags || []);
   const [hasMovedManually, setHasMovedManually] = useState(false);
@@ -131,12 +133,15 @@ function PaperPopup({ node, onClose, isRightPanelCollapsed, panelWidth }: { node
     setNotes((node as any).notes || ''); 
     setLocalTags((node as any).localTags || []);
     setHasMovedManually(false);
+    setPdfDownloaded(null);
     if (typeof window !== 'undefined') {
       const currentPw = panelWidth || 360;
       setPos({ x: Math.max(360, window.innerWidth - (isRightPanelCollapsed ? 446 : currentPw + 462)), y: 80 });
     }
-    // We intentionally omit isRightPanelCollapsed here so that toggling the panel
-    // doesn't completely reset the popup's Y position or wipe the user's manual drag state.
+    // Check PDF status
+    fetch(`/api/pdf/${node.id}`).then(r => r.json()).then(data => {
+      setPdfDownloaded(!!data.exists);
+    }).catch(() => setPdfDownloaded(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [node, panelWidth]);
 
@@ -308,9 +313,34 @@ function PaperPopup({ node, onClose, isRightPanelCollapsed, panelWidth }: { node
               padding: '0.4rem 0.8rem', borderRadius: '20px', background: 'var(--accent-primary)',
               color: '#fff', textDecoration: 'none', fontSize: '0.8rem', fontWeight: 500
             }}>
-              Read Paper
+              External Link
             </a>
           )}
+          <button 
+            disabled={isDownloadingPdf}
+            onClick={async () => {
+              setIsDownloadingPdf(true);
+              try {
+                const res = await fetch(`/api/pdf/${node.id}`, { method: 'POST' });
+                if (!res.ok) {
+                  const err = await res.json();
+                  throw new Error(err.error || 'Failed to download PDF');
+                }
+                setPdfDownloaded(true);
+                window.open(`/api/pdf/file/${node.id}`, '_blank');
+              } catch (e: any) {
+                alert(e.message);
+              } finally {
+                setIsDownloadingPdf(false);
+              }
+            }}
+            style={{
+              padding: '0.4rem 0.8rem', borderRadius: '20px', background: 'var(--accent-secondary)',
+              color: '#fff', border: 'none', cursor: isDownloadingPdf ? 'not-allowed' : 'pointer', fontSize: '0.8rem', fontWeight: 500,
+              opacity: isDownloadingPdf ? 0.7 : 1
+            }}>
+            {isDownloadingPdf ? 'Downloading...' : pdfDownloaded === true ? 'Open PDF' : 'Download PDF'}
+          </button>
         </div>
 
         {node.status === 'seed' && (
