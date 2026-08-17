@@ -5,6 +5,7 @@ import { useGraphStore, GraphNode } from '@/store/graphStore';
 import { formatAuthors } from '@/lib/formatters';
 import { matchesSearch } from '@/lib/search';
 import SearchInput from '@/components/SearchInput';
+import { Virtuoso } from 'react-virtuoso';
 
 function CitationModal({ node, onClose }: { node: GraphNode; onClose: () => void }) {
   const [copiedFormat, setCopiedFormat] = useState<string | null>(null);
@@ -1219,55 +1220,7 @@ export default function DetailPanel() {
                 )}
               </div>
 
-              <div
-                ref={scrollContainerRef}
-                onScroll={(e) => { scrollPositionRef.current = e.currentTarget.scrollTop; }}
-                style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '0.75rem', paddingRight: 0 }}
-              >
-                {collectionNodes.map(node => (
-                  <div key={node.id}
-                    onClick={() => setSelectedNode(selectedNode?.id === node.id ? null : node)}
-                    style={{
-                      padding: '0.75rem', background: 'var(--bg-surface)',
-                      borderRadius: 'var(--radius-md)', 
-                      border: selectedNode?.id === node.id ? '2px solid var(--accent-primary)' : '1px solid var(--border-subtle)',
-                      cursor: 'pointer'
-                    }}
-                  >
-                    <h3 title={selectedNode?.id === node.id ? undefined : node.title} style={{ fontSize: '0.9rem', marginBottom: '0.25rem', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{node.title}</h3>
-                    {((node as any).localTags && (node as any).localTags.length > 0) && (
-                      <div style={{ display: 'flex', gap: '0.25rem', flexWrap: 'wrap', marginTop: '0.25rem' }}>
-                        {((node as any).localTags as string[])
-                           .map(tid => tags.find(t => t.id === tid))
-                           .filter(Boolean)
-                           .map(t => (
-                             <span key={t!.id} style={{ fontSize: '0.65rem', padding: '0.1rem 0.3rem', borderRadius: '4px', background: t!.color + '40', color: 'var(--text-primary)', border: `1px solid ${t!.color}` }}>{t!.name}</span>
-                           ))
-                        }
-                      </div>
-                    )}
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '0.5rem' }}>
-                      <span style={{ fontSize: '0.75rem', color: 'var(--text-tertiary)' }}>
-                        {node.year} • {getDisplayCitationCount(node)} citations
-                      </span>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          if (window.confirm("Are you sure you want to remove this paper from your collection?")) {
-                            useGraphStore.getState().removeNode(node.id);
-                          }
-                        }}
-                        style={{
-                          padding: '0.25rem 0.5rem', background: 'transparent',
-                          color: '#ef4444', border: '1px solid #ef4444',
-                          borderRadius: 'var(--radius-sm)', cursor: 'pointer', fontSize: '0.75rem'
-                        }}
-                      >
-                        Remove
-                      </button>
-                    </div>
-                  </div>
-                ))}
+              <div style={{ flex: 1, minHeight: 0 }}>
                 {allCollectionNodes.length === 0 ? (
                   <div style={{ textAlign: 'center', padding: '2rem 0', color: 'var(--text-tertiary)', fontSize: '0.9rem' }}>
                     No papers added yet. Search on the left to add some!
@@ -1276,7 +1229,58 @@ export default function DetailPanel() {
                   <div style={{ textAlign: 'center', padding: '2rem 0', color: 'var(--text-tertiary)', fontSize: '0.9rem' }}>
                     No collection papers match your search.
                   </div>
-                ) : null}
+                ) : (
+                  <Virtuoso
+                    style={{ height: '100%' }}
+                    data={collectionNodes}
+                    itemContent={(index, node) => (
+                      <div style={{ paddingBottom: '0.75rem' }}>
+                        <div
+                          onClick={() => setSelectedNode(selectedNode?.id === node.id ? null : node)}
+                          style={{
+                            padding: '0.75rem', background: 'var(--bg-surface)',
+                            borderRadius: 'var(--radius-md)', 
+                            border: selectedNode?.id === node.id ? '2px solid var(--accent-primary)' : '1px solid var(--border-subtle)',
+                            cursor: 'pointer'
+                          }}
+                        >
+                          <h3 title={selectedNode?.id === node.id ? undefined : node.title} style={{ fontSize: '0.9rem', marginBottom: '0.25rem', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{node.title}</h3>
+                          {((node as any).localTags && (node as any).localTags.length > 0) && (
+                            <div style={{ display: 'flex', gap: '0.25rem', flexWrap: 'wrap', marginTop: '0.25rem' }}>
+                              {((node as any).localTags as string[])
+                                 .map(tid => tags.find(t => t.id === tid))
+                                 .filter(Boolean)
+                                 .map(t => (
+                                   <span key={t!.id} style={{ fontSize: '0.65rem', padding: '0.1rem 0.3rem', borderRadius: '4px', background: t!.color + '40', color: 'var(--text-primary)', border: `1px solid ${t!.color}` }}>{t!.name}</span>
+                                 ))
+                              }
+                            </div>
+                          )}
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '0.5rem' }}>
+                            <span style={{ fontSize: '0.75rem', color: 'var(--text-tertiary)' }}>
+                              {node.year} • {getDisplayCitationCount(node)} citations
+                            </span>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                if (window.confirm("Are you sure you want to remove this paper from your collection?")) {
+                                  useGraphStore.getState().removeNode(node.id);
+                                }
+                              }}
+                              style={{
+                                padding: '0.25rem 0.5rem', background: 'transparent',
+                                color: '#ef4444', border: '1px solid #ef4444',
+                                borderRadius: 'var(--radius-sm)', cursor: 'pointer', fontSize: '0.75rem'
+                              }}
+                            >
+                              Remove
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  />
+                )}
               </div>
             </div>
           )}
@@ -1377,7 +1381,7 @@ export default function DetailPanel() {
                 )}
               </div>
 
-              <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '0.75rem', paddingRight: 0 }}>
+              <div style={{ flex: 1, minHeight: 0 }}>
                 {allRelatedNodes.length === 0 ? (
                   <div style={{ textAlign: 'center', padding: '1rem 0', color: 'var(--text-tertiary)', fontSize: '0.85rem' }}>
                     No related papers. Click a paper to load its citations/references.
@@ -1387,50 +1391,56 @@ export default function DetailPanel() {
                     No related papers match your search.
                   </div>
                 ) : (
-                  filteredRelatedNodes.map(node => (
-                    <div key={node.id}
-                      onClick={() => setSelectedNode(selectedNode?.id === node.id ? null : node)}
-                      style={{
-                        padding: '0.75rem', background: 'var(--bg-surface)',
-                        borderRadius: 'var(--radius-md)', 
-                        border: selectedNode?.id === node.id 
-                          ? '2px solid var(--accent-primary)' 
-                          : (newlyAddedPapers?.includes(node.id) ? '2px solid var(--status-seed)' : '1px solid var(--border-subtle)'),
-                        cursor: 'pointer', opacity: 0.8
-                      }}
-                    >
-                      <h3 title={selectedNode?.id === node.id ? undefined : node.title} style={{ fontSize: '0.9rem', marginBottom: '0.25rem', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{node.title}</h3>
-                      {((node as any).localTags && (node as any).localTags.length > 0) && (
-                        <div style={{ display: 'flex', gap: '0.25rem', flexWrap: 'wrap', marginTop: '0.25rem' }}>
-                          {((node as any).localTags as string[])
-                             .map(tid => tags.find(t => t.id === tid))
-                             .filter(Boolean)
-                             .map(t => (
-                               <span key={t!.id} style={{ fontSize: '0.65rem', padding: '0.1rem 0.3rem', borderRadius: '4px', background: t!.color + '40', color: 'var(--text-primary)', border: `1px solid ${t!.color}` }}>{t!.name}</span>
-                             ))
-                          }
-                        </div>
-                      )}
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '0.5rem' }}>
-                        <span style={{ fontSize: '0.75rem', color: 'var(--text-tertiary)' }}>
-                          {node.year} • {getDisplayCitationCount(node)} citations
-                        </span>
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            useGraphStore.getState().addSeedPaper(node as any);
-                          }}
+                  <Virtuoso
+                    style={{ height: '100%' }}
+                    data={filteredRelatedNodes}
+                    itemContent={(index, node) => (
+                      <div style={{ paddingBottom: '0.75rem' }}>
+                        <div
+                          onClick={() => setSelectedNode(selectedNode?.id === node.id ? null : node)}
                           style={{
-                            padding: '0.25rem 0.5rem', background: 'var(--accent-primary)',
-                            color: 'white', border: 'none',
-                            borderRadius: 'var(--radius-sm)', cursor: 'pointer', fontSize: '0.75rem'
+                            padding: '0.75rem', background: 'var(--bg-surface)',
+                            borderRadius: 'var(--radius-md)', 
+                            border: selectedNode?.id === node.id 
+                              ? '2px solid var(--accent-primary)' 
+                              : (newlyAddedPapers?.includes(node.id) ? '2px solid var(--status-seed)' : '1px solid var(--border-subtle)'),
+                            cursor: 'pointer', opacity: 0.8
                           }}
                         >
-                          Add
-                        </button>
+                          <h3 title={selectedNode?.id === node.id ? undefined : node.title} style={{ fontSize: '0.9rem', marginBottom: '0.25rem', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{node.title}</h3>
+                          {((node as any).localTags && (node as any).localTags.length > 0) && (
+                            <div style={{ display: 'flex', gap: '0.25rem', flexWrap: 'wrap', marginTop: '0.25rem' }}>
+                              {((node as any).localTags as string[])
+                                 .map(tid => tags.find(t => t.id === tid))
+                                 .filter(Boolean)
+                                 .map(t => (
+                                   <span key={t!.id} style={{ fontSize: '0.65rem', padding: '0.1rem 0.3rem', borderRadius: '4px', background: t!.color + '40', color: 'var(--text-primary)', border: `1px solid ${t!.color}` }}>{t!.name}</span>
+                                 ))
+                              }
+                            </div>
+                          )}
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '0.5rem' }}>
+                            <span style={{ fontSize: '0.75rem', color: 'var(--text-tertiary)' }}>
+                              {node.year} • {getDisplayCitationCount(node)} citations
+                            </span>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                useGraphStore.getState().addSeedPaper(node as any);
+                              }}
+                              style={{
+                                padding: '0.25rem 0.5rem', background: 'var(--accent-primary)',
+                                color: 'white', border: 'none',
+                                borderRadius: 'var(--radius-sm)', cursor: 'pointer', fontSize: '0.75rem'
+                              }}
+                            >
+                              Add
+                            </button>
+                          </div>
+                        </div>
                       </div>
-                    </div>
-                  ))
+                    )}
+                  />
                 )}
               </div>
             </div>

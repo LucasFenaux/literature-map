@@ -88,46 +88,88 @@ interface GraphState {
   deleteTag: (id: string) => Promise<void>;
 }
 
+let lastProcessedNodes: GraphNode[] | null = null;
+let lastProcessedLinks: GraphLink[] | null = null;
+let cachedNodeDegrees: Map<string, number> | null = null;
+let cachedSeedEdgeCounts: Map<string, number> | null = null;
+
 const calculateSizes = (nodes: GraphNode[], links: GraphLink[], topNLimit: number = 100, cachedThreshold?: number) => {
-  const nodeDegrees: Record<string, number> = {};
-  const seedNodeIds = new Set(nodes.filter(n => n.status === 'seed' || n.status === 'collection').map(n => n.id));
-  const seedEdgeCounts: Record<string, number> = {};
+  let nodeDegrees: Map<string, number>;
+  let seedEdgeCounts: Map<string, number>;
 
-  links.forEach(l => {
-    const s = typeof l.source === 'string' ? l.source : (l.source as any).id;
-    const t = typeof l.target === 'string' ? l.target : (l.target as any).id;
-    nodeDegrees[s] = (nodeDegrees[s] || 0) + 1;
-    nodeDegrees[t] = (nodeDegrees[t] || 0) + 1;
+  // Cache hit: graph structure hasn't changed!
+  if (nodes === lastProcessedNodes && links === lastProcessedLinks && cachedNodeDegrees && cachedSeedEdgeCounts) {
+    nodeDegrees = cachedNodeDegrees;
+    seedEdgeCounts = cachedSeedEdgeCounts;
+  } else {
+    // Cache miss: compute from scratch
+    nodeDegrees = new Map<string, number>();
+    seedEdgeCounts = new Map<string, number>();
+    const seedNodeIds = new Set(nodes.filter(n => n.status === 'seed' || n.status === 'collection').map(n => n.id));
 
-    if (seedNodeIds.has(s) && !seedNodeIds.has(t)) {
-      seedEdgeCounts[t] = (seedEdgeCounts[t] || 0) + 1;
-    } else if (seedNodeIds.has(t) && !seedNodeIds.has(s)) {
-      seedEdgeCounts[s] = (seedEdgeCounts[s] || 0) + 1;
-    } else if (seedNodeIds.has(t) && seedNodeIds.has(s)) {
-      seedEdgeCounts[s] = (seedEdgeCounts[s] || 0) + 1;
-      seedEdgeCounts[t] = (seedEdgeCounts[t] || 0) + 1;
-    }
-  });
+    links.forEach(l => {
+      const s = typeof l.source === 'string' ? l.source : (l.source as any).id;
+      const t = typeof l.target === 'string' ? l.target : (l.target as any).id;
+      
+      nodeDegrees.set(s, (nodeDegrees.get(s) || 0) + 1);
+      nodeDegrees.set(t, (nodeDegrees.get(t) || 0) + 1);
 
-  const recommendedNodes = nodes.filter(n => n.status !== 'seed' && n.status !== 'collection');
-  
+      const sIsSeed = seedNodeIds.has(s);
+      const tIsSeed = seedNodeIds.has(t);
+
+      if (sIsSeed && !tIsSeed) {
+        seedEdgeCounts.set(t, (seedEdgeCounts.get(t) || 0) + 1);
+      } else if (tIsSeed && !sIsSeed) {
+        seedEdgeCounts.set(s, (seedEdgeCounts.get(s) || 0) + 1);
+      } else if (sIsSeed && tIsSeed) {
+        seedEdgeCounts.set(s, (seedEdgeCounts.get(s) || 0) + 1);
+        seedEdgeCounts.set(t, (seedEdgeCounts.get(t) || 0) + 1);
+      }
+    });
+
+    lastProcessedNodes = nodes;
+    lastProcessedLinks = links;
+    cachedNodeDegrees = nodeDegrees;
+    cachedSeedEdgeCounts = seedEdgeCounts;
+  }
+
   let threshold = 1;
-  let validNodes: GraphNode[] = [];
+  const validNodeIds = new Set<string>();
   
   if (cachedThreshold !== undefined) {
     threshold = cachedThreshold;
-    validNodes = recommendedNodes.filter(n => (seedEdgeCounts[n.id] || 0) >= threshold);
-  } else {
-    while (true) {
-      validNodes = recommendedNodes.filter(n => (seedEdgeCounts[n.id] || 0) >= threshold);
-      if (validNodes.length <= topNLimit || validNodes.length === 0) {
-        break;
+    for (const n of nodes) {
+      if (n.status !== 'seed' && n.status !== 'collection') {
+        if ((seedEdgeCounts.get(n.id) || 0) >= threshold) {
+          validNodeIds.add(n.id);
+        }
       }
-      threshold++;
+    }
+  } else {
+    const counts: number[] = [];
+    for (const n of nodes) {
+      if (n.status !== 'seed' && n.status !== 'collection') {
+        const c = seedEdgeCounts.get(n.id) || 0;
+        if (c > 0) counts.push(c);
+      }
+    }
+    
+    counts.sort((a, b) => b - a);
+    
+    if (counts.length <= topNLimit) {
+      threshold = 1;
+    } else {
+      threshold = counts[topNLimit] + 1;
+    }
+    
+    for (const n of nodes) {
+      if (n.status !== 'seed' && n.status !== 'collection') {
+        if ((seedEdgeCounts.get(n.id) || 0) >= threshold) {
+          validNodeIds.add(n.id);
+        }
+      }
     }
   }
-  
-  const validNodeIds = new Set(validNodes.map(n => n.id));
 
   nodes.forEach(n => {
     let isHidden = false;
@@ -138,7 +180,9 @@ const calculateSizes = (nodes: GraphNode[], links: GraphLink[], topNLimit: numbe
     }
     
     n.isHidden = isHidden;
-    n.val = ((n.status === 'seed' || n.status === 'collection') ? 20 : 10) + (nodeDegrees[n.id] || 0) * 2;
+    (n as any).seedEdgeCount = seedEdgeCounts.get(n.id) || 0;
+    (n as any).nodeDegree = nodeDegrees.get(n.id) || 0;
+    n.val = ((n.status === 'seed' || n.status === 'collection') ? 20 : 10) + ((n as any).nodeDegree) * 2;
   });
   return { nodes, threshold };
 };

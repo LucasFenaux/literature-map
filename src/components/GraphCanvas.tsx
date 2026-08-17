@@ -32,33 +32,6 @@ export default function GraphCanvas() {
   const visibleNodeIds = useMemo(() => {
     let nodes = graphData.nodes;
     let links = graphData.links;
-
-    // Calculate edge counts for all nodes in the current collection graph
-    // We now ONLY count edges if the other end of the connection is a collection/seed paper.
-    const edgeCounts = new Map<string, number>();
-    const nodeIds = new Set(nodes.map(n => n.id));
-    const collectionIds = new Set(
-      nodes.filter(n => n.status === 'seed' || n.status === 'collection').map(n => n.id)
-    );
-    
-    links.forEach(l => {
-      const sourceId = typeof l.source === 'object' ? (l.source as any).id : l.source;
-      const targetId = typeof l.target === 'object' ? (l.target as any).id : l.target;
-      
-      if (nodeIds.has(sourceId) && nodeIds.has(targetId)) {
-        if (collectionIds.has(targetId)) {
-          edgeCounts.set(sourceId, (edgeCounts.get(sourceId) || 0) + 1);
-        }
-        if (collectionIds.has(sourceId)) {
-          edgeCounts.set(targetId, (edgeCounts.get(targetId) || 0) + 1);
-        }
-      }
-    });
-
-    // Attach edgeCount to nodes and apply edgeFilter
-    nodes.forEach((n: any) => {
-      n.edgeCount = edgeCounts.get(n.id) || 0;
-    });
     
     let visibleIds = new Set(nodes.map(n => n.id));
 
@@ -71,7 +44,7 @@ export default function GraphCanvas() {
 
     // Edge Filter
     for (const node of nodes) {
-       if (node.status !== 'seed' && (node as any).edgeCount < edgeFilter) {
+       if (node.status !== 'seed' && (node as any).seedEdgeCount < edgeFilter) {
           visibleIds.delete(node.id);
        }
     }
@@ -188,39 +161,19 @@ export default function GraphCanvas() {
     let maxCitations = 1;
     let maxEdges = 1;
     let maxSeedEdges = 1;
-    const nodeIds = new Set(graphData.nodes.map(n => n.id));
     
     graphData.nodes.forEach(n => {
        if (n.citationCount && n.citationCount > maxCitations) maxCitations = n.citationCount;
-    });
-    
-    const counts = new Map<string, number>();
-    const collectionIds = new Set(
-      graphData.nodes.filter(n => n.status === 'seed' || n.status === 'collection').map(n => n.id)
-    );
-    
-    graphData.links.forEach(l => {
-       const sid = typeof l.source === 'object' ? l.source.id : l.source;
-       const tid = typeof l.target === 'object' ? l.target.id : l.target;
-       if (nodeIds.has(sid) && nodeIds.has(tid)) {
-         if (collectionIds.has(tid)) counts.set(sid, (counts.get(sid) || 0) + 1);
-         if (collectionIds.has(sid)) counts.set(tid, (counts.get(tid) || 0) + 1);
+       const count = (n as any).seedEdgeCount || 0;
+       if (n.status === 'seed' || n.status === 'collection') {
+          if (count > maxSeedEdges) maxSeedEdges = count;
+       } else {
+          if (count > maxEdges) maxEdges = count;
        }
     });
-    
-    for (const [id, count] of counts.entries()) {
-       const node = graphData.nodes.find(n => n.id === id);
-       if (node) {
-          if (node.status === 'seed' || node.status === 'collection') {
-             if (count > maxSeedEdges) maxSeedEdges = count;
-          } else {
-             if (count > maxEdges) maxEdges = count;
-          }
-       }
-    }
     
     return { maxEdges, maxSeedEdges, maxCitations };
-  }, [graphData.nodes, graphData.links]);
+  }, [graphData.nodes]);
 
   const getNodeSizeFactor = useCallback((node: any) => {
      let isCollectionNode = node.status === 'seed' || node.status === 'collection';
