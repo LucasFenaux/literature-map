@@ -11,13 +11,12 @@ function getHeaders(): HeadersInit {
   return {};
 }
 
+import { EnvConfigAdapter } from '@/domain/repositories/SettingsRepository';
+import { LogRepository } from '@/domain/repositories/LogRepository';
+import { HttpClient } from '@/domain/adapters/HttpClient';
+
 export function logS2ApiCall(endpoint: string, cached: boolean) {
-  try {
-    const db = require('./db').default;
-    db.prepare('INSERT INTO s2_api_log (endpoint, cached) VALUES (?, ?)').run(endpoint, cached ? 1 : 0);
-  } catch (e) {
-    // Silently fail — logging should never break the app
-  }
+  LogRepository.logApiCall(endpoint, cached);
 }
 
 function mapS2ToPaper(s2Paper: any): Paper {
@@ -36,76 +35,23 @@ function mapS2ToPaper(s2Paper: any): Paper {
   };
 }
 
-async function fetchWithBackoff(url: string, retries = 4): Promise<any> {
-  const db = (await import('./db')).default;
+async function s2Fetch(url: string): Promise<any> {
   let cacheFreshnessDays = 7;
+  const envConfig = EnvConfigAdapter.getEnvConfig();
   if (url.includes('/references?')) {
-    if (process.env.CACHE_FRESHNESS_REFERENCES_DAYS) {
-      cacheFreshnessDays = parseInt(process.env.CACHE_FRESHNESS_REFERENCES_DAYS, 10);
-    } else if (process.env.CACHE_FRESHNESS_DAYS) {
-      cacheFreshnessDays = parseInt(process.env.CACHE_FRESHNESS_DAYS, 10);
-    } else {
-      cacheFreshnessDays = 30; // default for references
-    }
+    cacheFreshnessDays = parseInt(envConfig.cacheFreshnessReferences, 10);
   } else {
-    // Citations or search queries
-    if (process.env.CACHE_FRESHNESS_CITATIONS_DAYS) {
-      cacheFreshnessDays = parseInt(process.env.CACHE_FRESHNESS_CITATIONS_DAYS, 10);
-    } else if (process.env.CACHE_FRESHNESS_DAYS) {
-      cacheFreshnessDays = parseInt(process.env.CACHE_FRESHNESS_DAYS, 10);
-    } else {
-      cacheFreshnessDays = 7; // default for citations
-    }
+    cacheFreshnessDays = parseInt(envConfig.cacheFreshnessCitations, 10);
   }
+  
   if (isNaN(cacheFreshnessDays)) cacheFreshnessDays = 7;
-  
-  const CACHE_TTL_MS = cacheFreshnessDays * 24 * 60 * 60 * 1000;
-  
-  // Check cache
-  try {
-    const row = db.prepare('SELECT data, timestamp FROM api_cache WHERE key = ?').get(url) as any;
-    if (row) {
-      const ts = new Date(row.timestamp + 'Z').getTime();
-      if (Date.now() - ts < CACHE_TTL_MS) {
-        logS2ApiCall(url, true);
-        return { ok: true, json: async () => JSON.parse(row.data) };
-      }
-    }
-  } catch (e) {
-    console.error('Cache read error', e);
-  }
 
-  let attempt = 0;
-  const baseDelay = 1000;
-  
-  while (attempt < retries) {
-    const res = await fetch(url, { headers: getHeaders() });
-    if (res.status !== 429) {
-      logS2ApiCall(url, false);
-      if (res.ok || res.status === 404 || res.status === 400) {
-        const cloned = res.clone();
-        const data = await cloned.text();
-        try {
-          db.prepare('INSERT OR REPLACE INTO api_cache (key, data, timestamp) VALUES (?, ?, CURRENT_TIMESTAMP)').run(url, data);
-        } catch (e) {
-          console.error('Cache write error', e);
-        }
-      }
-      return res;
-    }
-    attempt++;
-    if (attempt >= retries) {
-      throw new Error('S2_RATE_LIMIT');
-    }
-    const delayMs = Math.min(baseDelay * Math.pow(2, attempt) + Math.random() * 500, 5000);
-    await new Promise(r => setTimeout(r, delayMs));
-  }
-  throw new Error('S2_RATE_LIMIT');
+  return HttpClient.fetchWithBackoff(url, getHeaders(), cacheFreshnessDays, 4, (cached) => logS2ApiCall(url, cached));
 }
 
 export async function searchS2Papers(query: string, limit = 10): Promise<Paper[]> {
   const url = `${S2_API_URL}/paper/search?query=${encodeURIComponent(query)}&limit=${limit}&fields=${S2_FIELDS},references.paperId`;
-  const res = await fetchWithBackoff(url);
+  const res = await s2Fetch(url);
   
   if (!res.ok) {
     if (res.status === 429) throw new Error('Rate limit exceeded (429)');
@@ -121,7 +67,7 @@ export async function searchS2Papers(query: string, limit = 10): Promise<Paper[]
 
 export async function getS2PaperByTitle(title: string): Promise<string | null> {
   const url = `${S2_API_URL}/paper/search?query=${encodeURIComponent(title)}&limit=1&fields=paperId`;
-  const res = await fetchWithBackoff(url);
+  const res = await s2Fetch(url);
   
   if (!res.ok) return null;
   
@@ -134,7 +80,7 @@ export async function getS2PaperByTitle(title: string): Promise<string | null> {
 
 export async function getS2PaperMatch(query: string): Promise<Paper | null> {
   const url = `${S2_API_URL}/paper/search/match?query=${encodeURIComponent(query)}&fields=${S2_FIELDS}`;
-  const res = await fetchWithBackoff(url);
+  const res = await s2Fetch(url);
   
   if (!res.ok) {
     if (res.status === 429) throw new Error('Rate limit exceeded (429)');
@@ -157,7 +103,7 @@ export async function getS2Citations(paperId: string, limit = 500, maxTotal = 20
   
   while (allCitations.length < maxTotal) {
     const url = `${S2_API_URL}/paper/${paperId}/citations?limit=${limit}&offset=${offset}&fields=${citationFields}`;
-    const res = await fetchWithBackoff(url);
+    const res = await s2Fetch(url);
     
     if (!res.ok) break;
     
@@ -193,7 +139,7 @@ export async function getS2References(paperId: string, limit = 500, maxTotal = 2
   
   while (allReferences.length < maxTotal) {
     const url = `${S2_API_URL}/paper/${paperId}/references?limit=${limit}&offset=${offset}&fields=${referenceFields}`;
-    const res = await fetchWithBackoff(url);
+    const res = await s2Fetch(url);
     
     if (!res.ok) break;
     
@@ -243,7 +189,7 @@ export async function getS2PapersByDois(dois: string[]): Promise<Paper[]> {
         const cleanDoi = dois[i].replace(/[{}]/g, '');
         const url = `${S2_API_URL}/paper/DOI:${cleanDoi}?fields=${S2_FIELDS}`;
         
-        fetchWithBackoff(url)
+        s2Fetch(url)
           .then(async res => {
             if (res.ok) {
               const data = await res.json();

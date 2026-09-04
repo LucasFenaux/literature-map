@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import db from '@/lib/db';
+import { PaperRepository } from '@/domain/repositories/PaperRepository';
 
 export async function PUT(request: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
@@ -12,24 +12,17 @@ export async function PUT(request: Request, { params }: { params: Promise<{ id: 
     const body = await request.json();
     const { status, localTags, notes } = body;
     
-    const currentStmt = db.prepare('SELECT status, localTags, notes FROM papers WHERE id = ? AND collectionId = ?');
-    const current = currentStmt.get(id, collectionId) as any;
+    const current = PaperRepository.getPaper(id, collectionId);
     
     if (!current) {
       return NextResponse.json({ error: 'Paper not found in collection' }, { status: 404 });
     }
 
     const newStatus = status !== undefined ? status : current.status;
-    const newTags = localTags !== undefined ? JSON.stringify(localTags) : current.localTags;
+    const newTags = localTags !== undefined ? JSON.stringify(localTags) : JSON.stringify(current.localTags);
     const newNotes = notes !== undefined ? notes : current.notes;
 
-    const updateStmt = db.prepare(`
-      UPDATE papers 
-      SET status = ?, localTags = ?, notes = ?
-      WHERE id = ? AND collectionId = ?
-    `);
-
-    updateStmt.run(newStatus, newTags, newNotes, id, collectionId);
+    PaperRepository.updatePaper(id, collectionId, newStatus, newTags, newNotes);
 
     return NextResponse.json({ message: 'Paper updated successfully' });
   } catch (error: any) {
@@ -46,8 +39,7 @@ export async function DELETE(request: Request, { params }: { params: Promise<{ i
     const collectionId = searchParams.get('collectionId');
     if (!collectionId) return NextResponse.json({ error: 'collectionId required' }, { status: 400 });
     
-    const deleteStmt = db.prepare('DELETE FROM papers WHERE id = ? AND collectionId = ?');
-    deleteStmt.run(id, collectionId);
+    PaperRepository.deletePaper(id, collectionId);
 
     return NextResponse.json({ message: 'Paper deleted successfully' });
   } catch (error: any) {

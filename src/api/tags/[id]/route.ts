@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
-import db from '@/lib/db';
+import { TagRepository } from '@/domain/repositories/TagRepository';
+import { PaperRepository } from '@/domain/repositories/PaperRepository';
 
 export async function PUT(request: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
@@ -12,21 +13,17 @@ export async function PUT(request: Request, { params }: { params: Promise<{ id: 
       return NextResponse.json({ error: 'Name is required' }, { status: 400 });
     }
 
-    const currentStmt = db.prepare('SELECT weight FROM tags WHERE id = ?');
-    const current = currentStmt.get(id) as any;
+    const current = TagRepository.getTag(id);
     if (!current) {
       return NextResponse.json({ error: 'Tag not found' }, { status: 404 });
     }
 
-    const updateStmt = db.prepare(`
-      UPDATE tags 
-      SET name = ?, color = ?, weight = ?
-      WHERE id = ?
-    `);
+    const updatedWeight = weight !== undefined ? weight : current.weight;
+    const updatedColor = color || '#888888';
+    
+    TagRepository.updateTag(id, name, updatedColor, updatedWeight);
 
-    updateStmt.run(name, color || '#888888', weight !== undefined ? weight : current.weight, id);
-
-    return NextResponse.json({ message: 'Tag updated successfully', tag: { id, name, color: color || '#888888', weight: weight !== undefined ? weight : current.weight } });
+    return NextResponse.json({ message: 'Tag updated successfully', tag: { id, name, color: updatedColor, weight: updatedWeight } });
   } catch (error: any) {
     console.error('Database PUT tags error:', error);
     if (error.code === 'SQLITE_CONSTRAINT_UNIQUE' || error.message.includes('UNIQUE')) {
@@ -41,31 +38,13 @@ export async function DELETE(request: Request, { params }: { params: Promise<{ i
     const resolvedParams = await params;
     const { id } = resolvedParams;
     
-    const deleteStmt = db.prepare('DELETE FROM tags WHERE id = ?');
-    const result = deleteStmt.run(id);
+    const changes = TagRepository.deleteTag(id);
 
-    if (result.changes === 0) {
+    if (changes === 0) {
       return NextResponse.json({ error: 'Tag not found' }, { status: 404 });
     }
 
-    // We should probably also remove the tag from all papers' localTags.
-    // However, since localTags is a JSON string of array of IDs, it's non-trivial in SQLite without JSON1 extension.
-    // We can rely on the frontend filtering out invalid tag IDs, and eventually cleaning them up on save.
-    // For completeness, we could fetch all papers, parse, remove, and update, but it might be slow.
-    // Assuming JSON1 is available in better-sqlite3:
-    try {
-      db.prepare(`
-        UPDATE papers 
-        SET localTags = (
-          SELECT json_group_array(value) 
-          FROM json_each(localTags) 
-          WHERE value != ?
-        )
-        WHERE localTags LIKE '%' || ? || '%'
-      `).run(id, id);
-    } catch (e) {
-      console.warn("Failed to clean up tags from papers natively, relying on frontend cleanup.", e);
-    }
+    PaperRepository.removeTagFromAll(id);
 
     return NextResponse.json({ message: 'Tag deleted successfully' });
   } catch (error: any) {

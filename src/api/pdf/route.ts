@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import fs from 'fs';
 import path from 'path';
-import db from '@/lib/db';
+import { PaperRepository } from '@/domain/repositories/PaperRepository';
 
 const PDF_DIR = path.join(process.cwd(), 'data', 'pdfs');
 
@@ -14,8 +14,6 @@ export async function GET(request: Request) {
     const files = fs.readdirSync(PDF_DIR).filter(f => f.endsWith('.pdf'));
     const pdfs = [];
 
-    const getPaperStmt = db.prepare('SELECT title FROM papers WHERE id = ? OR id = ?');
-
     for (const file of files) {
       const safeId = file.replace('.pdf', '');
       const s2Id = `s2:${safeId}`;
@@ -23,7 +21,7 @@ export async function GET(request: Request) {
       
       let title = 'Unknown Paper';
       try {
-        const row = getPaperStmt.get(s2Id, safeId) as any;
+        const row = PaperRepository.getPaperById(s2Id) || PaperRepository.getPaperById(safeId);
         if (row && row.title) {
           title = row.title;
         }

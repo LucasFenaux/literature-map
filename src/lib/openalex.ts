@@ -86,53 +86,17 @@ function deduplicatePapers(papers: Paper[]): Paper[] {
   });
 }
 
-// 24 hours caching
+import { HttpClient } from '@/domain/adapters/HttpClient';
+
 async function fetchWithCache(url: string): Promise<any> {
-  const db = (await import('./db')).default;
   let cacheFreshnessDays = 7;
   if (process.env.CACHE_FRESHNESS_DAYS) {
     cacheFreshnessDays = parseInt(process.env.CACHE_FRESHNESS_DAYS, 10);
     if (isNaN(cacheFreshnessDays)) cacheFreshnessDays = 7;
   }
-  const CACHE_TTL_MS = cacheFreshnessDays * 24 * 60 * 60 * 1000;
-  
-  // Check cache
-  try {
-    const row = db.prepare('SELECT data, timestamp FROM api_cache WHERE key = ?').get(url) as any;
-    if (row) {
-      const ts = new Date(row.timestamp + 'Z').getTime();
-      if (Date.now() - ts < CACHE_TTL_MS) {
-        const parsed = JSON.parse(row.data);
-        if (parsed.error === 404) return null;
-        return parsed;
-      }
-    }
-  } catch (e) {
-    console.error('Cache read error', e);
-  }
-
-  // Fetch
-  const response = await fetch(url);
-  if (!response.ok) {
-    if (response.status === 404) {
-      try {
-        db.prepare('INSERT OR REPLACE INTO api_cache (key, data, timestamp) VALUES (?, ?, CURRENT_TIMESTAMP)').run(url, JSON.stringify({error: 404}));
-      } catch (e) {}
-      return null;
-    }
-    throw new Error('Failed to fetch from OpenAlex');
-  }
-  
-  const data = await response.json();
-  
-  // Save to cache
-  try {
-    db.prepare('INSERT OR REPLACE INTO api_cache (key, data, timestamp) VALUES (?, ?, CURRENT_TIMESTAMP)').run(url, JSON.stringify(data));
-  } catch (e) {
-    console.error('Cache write error', e);
-  }
-  
-  return data;
+  const res = await HttpClient.fetchWithBackoff(url, {}, cacheFreshnessDays, 1);
+  if (!res) return null;
+  return res.json();
 }
 
 export async function searchPapers(query: string): Promise<Paper[]> {

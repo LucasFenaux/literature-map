@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server';
-import db from '@/lib/db';
+import { PaperRepository } from '@/domain/repositories/PaperRepository';
+import { CacheRepository } from '@/domain/repositories/CacheRepository';
+import { EnvConfigAdapter } from '@/domain/repositories/SettingsRepository';
 
 const S2_API_URL = 'https://api.semanticscholar.org/graph/v1';
 const S2_FIELDS = 'paperId,title,year,publicationDate,authors,abstract,venue,citationCount,url';
@@ -10,38 +12,27 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     const resolvedParams = await params;
     const { id } = resolvedParams; // this is collectionId
 
-    const papers = db.prepare('SELECT id, title FROM papers WHERE collectionId = ? AND status = ?').all(id, 'seed') as any[];
+    const papers = PaperRepository.getPapersForCollection(id).filter((p: any) => p.status === 'seed');
 
     if (papers.length === 0) {
       return NextResponse.json({ citations: { fresh: 0, total: 0 }, references: { fresh: 0, total: 0 } });
     }
 
-    let cacheFreshnessCitations = 7;
-    if (process.env.CACHE_FRESHNESS_CITATIONS_DAYS) {
-      cacheFreshnessCitations = parseInt(process.env.CACHE_FRESHNESS_CITATIONS_DAYS, 10);
-      if (isNaN(cacheFreshnessCitations)) cacheFreshnessCitations = 7;
-    } else if (process.env.CACHE_FRESHNESS_DAYS) {
-      cacheFreshnessCitations = parseInt(process.env.CACHE_FRESHNESS_DAYS, 10);
-      if (isNaN(cacheFreshnessCitations)) cacheFreshnessCitations = 7;
-    }
+    const envConfig = EnvConfigAdapter.getEnvConfig();
+    let cacheFreshnessCitations = parseInt(envConfig.cacheFreshnessCitations, 10);
+    if (isNaN(cacheFreshnessCitations)) cacheFreshnessCitations = 7;
 
-    let cacheFreshnessReferences = 30;
-    if (process.env.CACHE_FRESHNESS_REFERENCES_DAYS) {
-      cacheFreshnessReferences = parseInt(process.env.CACHE_FRESHNESS_REFERENCES_DAYS, 10);
-      if (isNaN(cacheFreshnessReferences)) cacheFreshnessReferences = 30;
-    } else if (process.env.CACHE_FRESHNESS_DAYS) {
-      cacheFreshnessReferences = parseInt(process.env.CACHE_FRESHNESS_DAYS, 10);
-      if (isNaN(cacheFreshnessReferences)) cacheFreshnessReferences = 30;
-    }
+    let cacheFreshnessReferences = parseInt(envConfig.cacheFreshnessReferences, 10);
+    if (isNaN(cacheFreshnessReferences)) cacheFreshnessReferences = 30;
 
     const CACHE_CITATIONS_TTL_MS = cacheFreshnessCitations * 24 * 60 * 60 * 1000;
     const CACHE_REFERENCES_TTL_MS = cacheFreshnessReferences * 24 * 60 * 60 * 1000;
     const now = Date.now();
 
     const checkCache = (url: string, ttl: number) => {
-      const row = db.prepare('SELECT timestamp FROM api_cache WHERE key = ?').get(url) as any;
-      if (row) {
-        const ts = new Date(row.timestamp + 'Z').getTime();
+      const timestamp = CacheRepository.getTimestamp(url);
+      if (timestamp) {
+        const ts = new Date(timestamp + 'Z').getTime();
         return (now - ts) < ttl;
       }
       return false;
@@ -56,14 +47,12 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
 
       let s2Id = paper.id.startsWith('s2:') ? paper.id.replace('s2:', '') : null;
 
-      // If we don't have an s2Id but we have an API key, we try to fetch it by title.
-      // That uses `getS2PaperByTitle` which hits `/paper/search?query=...&limit=1&fields=paperId`.
-      if (!s2Id && process.env.SEMANTIC_SCHOLAR_API_KEY) {
+      if (!s2Id && envConfig.semanticScholarApiKey) {
         const titleUrl = `${S2_API_URL}/paper/search?query=${encodeURIComponent(paper.title)}&limit=1&fields=paperId`;
-        const titleRow = db.prepare('SELECT data, timestamp FROM api_cache WHERE key = ?').get(titleUrl) as any;
-        if (titleRow && (now - new Date(titleRow.timestamp + 'Z').getTime() < CACHE_CITATIONS_TTL_MS)) {
+        const cached = CacheRepository.get(titleUrl);
+        if (cached && (now - new Date(cached.timestamp + 'Z').getTime() < CACHE_CITATIONS_TTL_MS)) {
           try {
-            const data = JSON.parse(titleRow.data);
+            const data = JSON.parse(cached.data);
             if (data && data.data && data.data.length > 0) {
               s2Id = data.data[0].paperId;
             }
@@ -77,8 +66,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
          isCitationsFresh = checkCache(`${S2_API_URL}/paper/${s2Id}/citations?limit=500&offset=0&fields=${citationFields}`, CACHE_CITATIONS_TTL_MS);
          isReferencesFresh = checkCache(`${S2_API_URL}/paper/${s2Id}/references?limit=500&offset=0&fields=${referenceFields}`, CACHE_REFERENCES_TTL_MS);
       } else {
-         if (process.env.SEMANTIC_SCHOLAR_API_KEY) {
-           // We enforce S2. If we couldn't get an s2Id, we at least did a title search which would be cached.
+         if (envConfig.semanticScholarApiKey) {
            const titleUrl = `${S2_API_URL}/paper/search?query=${encodeURIComponent(paper.title)}&limit=1&fields=paperId`;
            isCitationsFresh = checkCache(titleUrl, CACHE_CITATIONS_TTL_MS);
            isReferencesFresh = isCitationsFresh;

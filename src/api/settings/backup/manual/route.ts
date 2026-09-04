@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import db from '@/lib/db';
+import { DatabaseRepository } from '@/domain/repositories/DatabaseRepository';
 import fs from 'fs';
 import path from 'path';
 
@@ -15,7 +15,7 @@ export async function POST() {
     const backupPath = path.join(targetDir, 'papers_manual_backup_latest.db');
     
     // SQLite safe backup
-    await db.backup(backupPath);
+    await DatabaseRepository.backup(backupPath);
     return NextResponse.json({ success: true, path: backupPath });
   } catch (err: any) {
     return NextResponse.json({ error: err.message }, { status: 500 });

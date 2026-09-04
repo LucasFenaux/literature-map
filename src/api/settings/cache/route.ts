@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
-import db from '@/lib/db';
+import { PaperRepository } from '@/domain/repositories/PaperRepository';
+import { CacheRepository } from '@/domain/repositories/CacheRepository';
 
 export async function DELETE(request: Request) {
   try {
@@ -7,25 +8,18 @@ export async function DELETE(request: Request) {
     const collectionId = searchParams.get('collectionId');
     
     if (collectionId) {
-       const papers = db.prepare('SELECT id FROM papers WHERE collectionId = ?').all(collectionId) as {id: string}[];
-       const deleteStmt = db.prepare(`DELETE FROM api_cache WHERE key LIKE ?`);
+       const papers = PaperRepository.getPapersForCollection(collectionId);
        
        let count = 0;
-       // Execute inside a transaction for safety and speed
-       const transaction = db.transaction(() => {
-         for (const p of papers) {
-            // Clean ID to match both OpenAlex and S2 URLs
-            const cleanId = p.id.replace('s2:', '');
-            const info = deleteStmt.run(`%${cleanId}%`);
-            count += info.changes;
-         }
-       });
+       for (const p of papers) {
+          const cleanId = p.id.replace('s2:', '');
+          count += CacheRepository.deleteLike(`%${cleanId}%`);
+       }
        
-       transaction();
        return NextResponse.json({ message: `Cleared ${count} cache entries for the active collection` });
     } else {
-       const info = db.prepare('DELETE FROM api_cache').run();
-       return NextResponse.json({ message: `Cleared all ${info.changes} cache entries` });
+       const changes = CacheRepository.clearAll();
+       return NextResponse.json({ message: `Cleared all ${changes} cache entries` });
     }
   } catch (error: any) {
     console.error('Failed to clear cache', error);

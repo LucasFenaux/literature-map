@@ -1,15 +1,13 @@
 import { NextResponse } from 'next/server';
 import { getPaperDetails, getCitations, getWorksByIds } from '@/lib/openalex';
 import { getS2PaperByTitle, getS2Citations, getS2References } from '@/lib/semanticscholar';
-import db from '@/lib/db';
+import { PaperRepository } from '@/domain/repositories/PaperRepository';
+import { QueueRepository } from '@/domain/repositories/QueueRepository';
+import { CitationRepository } from '@/domain/repositories/CitationRepository';
 
-const queueRetry = (paperId: string, type: string) => {
+const queueRetry = (paperId: string, type: 'citations' | 'references' | 'both') => {
   try {
-    const insertStmt = db.prepare(`
-      INSERT OR IGNORE INTO retry_queue (id, paperId, type, status)
-      VALUES (?, ?, ?, 'pending')
-    `);
-    insertStmt.run(`${paperId}-${type}`, paperId, type);
+    QueueRepository.addQueueItem(paperId, type);
   } catch (err) {
     console.error('Failed to queue retry', err);
   }
@@ -20,7 +18,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     const resolvedParams = await params;
     const { id } = resolvedParams;
     const { searchParams } = new URL(request.url);
-    const type = searchParams.get('type') || 'both'; // 'citations' | 'references' | 'both'
+    const type = (searchParams.get('type') || 'both') as 'citations' | 'references' | 'both';
 
     let citations: any[] = [];
     let references: any[] = [];
@@ -30,14 +28,14 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     
     // Prioritize Semantic Scholar if API key exists and we have an OpenAlex ID
     if (!targetS2Id && process.env.SEMANTIC_SCHOLAR_API_KEY) {
-      const localPaper = db.prepare('SELECT title FROM papers WHERE id = ?').get(id) as any;
+      const localPaper = PaperRepository.getPaperById(id);
       let titleToSearch = localPaper?.title;
 
       if (titleToSearch) {
         try {
           targetS2Id = await getS2PaperByTitle(titleToSearch);
         } catch (e: any) {
-          if (e.message === 'S2_RATE_LIMIT') queueRetry(id, type);
+          if (e.message === 'S2_RATE_LIMIT' || e.message === 'RATE_LIMIT') queueRetry(id, type);
         }
       }
     }
@@ -50,7 +48,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
         if (type === 'references' || type === 'both') references = await getS2References(targetS2Id);
         usedS2 = true;
       } catch (e: any) {
-        if (e.message === 'S2_RATE_LIMIT') {
+        if (e.message === 'S2_RATE_LIMIT' || e.message === 'RATE_LIMIT') {
           queueRetry(id, type);
         } else {
           throw e;
@@ -74,7 +72,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
       
       // Semantic Scholar Fallback Logic (if OpenAlex returned nothing and we didn't already try S2)
       if ((type === 'citations' || type === 'both') && citations.length === 0 && !targetS2Id) {
-        const localPaper = db.prepare('SELECT title FROM papers WHERE id = ?').get(id) as any;
+        const localPaper = PaperRepository.getPaperById(id);
         let titleToSearch = localPaper?.title;
         if (!titleToSearch) {
           if (!paper) paper = await getPaperDetails(id);
@@ -86,13 +84,13 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
             const fallbackS2Id = await getS2PaperByTitle(titleToSearch);
             if (fallbackS2Id) citations = await getS2Citations(fallbackS2Id);
           } catch (e: any) {
-            if (e.message === 'S2_RATE_LIMIT') queueRetry(id, 'citations');
+            if (e.message === 'S2_RATE_LIMIT' || e.message === 'RATE_LIMIT') queueRetry(id, 'citations');
           }
         }
       }
 
       if ((type === 'references' || type === 'both') && references.length === 0 && !targetS2Id) {
-        const localPaper = db.prepare('SELECT title FROM papers WHERE id = ?').get(id) as any;
+        const localPaper = PaperRepository.getPaperById(id);
         let titleToSearch = localPaper?.title;
         if (!titleToSearch) {
           if (!paper) paper = await getPaperDetails(id);
@@ -104,7 +102,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
             const fallbackS2Id = await getS2PaperByTitle(titleToSearch);
             if (fallbackS2Id) references = await getS2References(fallbackS2Id);
           } catch (e: any) {
-            if (e.message === 'S2_RATE_LIMIT') queueRetry(id, 'references');
+            if (e.message === 'S2_RATE_LIMIT' || e.message === 'RATE_LIMIT') queueRetry(id, 'references');
           }
         }
       }
@@ -115,37 +113,16 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     const savePapersAndLinks = (papers: any[], isCitation: boolean) => {
       if (!collectionId) return;
       
-      const insertPaperStmt = db.prepare(`
-        INSERT OR IGNORE INTO papers (id, collectionId, doi, title, abstract, authors, year, publicationDate, citationCount, url, venue, status, localTags, notes)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'recommended', '[]', '')
-      `);
-      
-      const insertLinkStmt = db.prepare(`
-        INSERT OR IGNORE INTO citations (collectionId, sourceId, targetId)
-        VALUES (?, ?, ?)
-      `);
+      const newLinks = [];
 
-      db.transaction(() => {
-        for (const p of papers) {
-          insertPaperStmt.run(
-            p.id,
-            collectionId,
-            p.doi || null,
-            p.title || 'Unknown Title',
-            p.abstract || '',
-            JSON.stringify(p.authors || []),
-            p.year || null,
-            p.publicationDate || null,
-            p.citationCount || 0,
-            p.url || null,
-            p.venue || null
-          );
-          
-          const source = isCitation ? p.id : id;
-          const target = isCitation ? id : p.id;
-          insertLinkStmt.run(collectionId, source, target);
-        }
-      })();
+      for (const p of papers) {
+        PaperRepository.addPaper(p, collectionId, 'recommended');
+        
+        const source = isCitation ? p.id : id;
+        const target = isCitation ? id : p.id;
+        newLinks.push({ source, target });
+      }
+      CitationRepository.addLinks(collectionId, newLinks);
     };
 
     if (citations.length > 0) savePapersAndLinks(citations, true);
@@ -154,26 +131,22 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     // Cache cross-edges (new papers citing existing ones, or citing each other)
     if (collectionId) {
       try {
-        const existingIdsObj = db.prepare('SELECT id FROM papers WHERE collectionId = ?').all(collectionId);
-        const existingIds = new Set(existingIdsObj.map((r: any) => r.id));
+        const existingPapersObj = PaperRepository.getPapersForCollection(collectionId);
+        const existingIds = new Set(existingPapersObj.map((r: any) => r.id));
         
         const allNewPapers = [...citations, ...references];
-        const insertLinkStmt = db.prepare(`
-          INSERT OR IGNORE INTO citations (collectionId, sourceId, targetId)
-          VALUES (?, ?, ?)
-        `);
+        const crossLinks = [];
 
-        db.transaction(() => {
-          for (const p of allNewPapers) {
-            if (p.referencedWorks && p.referencedWorks.length > 0) {
-              for (const refId of p.referencedWorks) {
-                if (existingIds.has(refId)) {
-                  insertLinkStmt.run(collectionId, p.id, refId);
-                }
+        for (const p of allNewPapers) {
+          if (p.referencedWorks && p.referencedWorks.length > 0) {
+            for (const refId of p.referencedWorks) {
+              if (existingIds.has(refId)) {
+                crossLinks.push({ source: p.id, target: refId });
               }
             }
           }
-        })();
+        }
+        CitationRepository.addLinks(collectionId, crossLinks);
       } catch (err) {
         console.error('Failed to cache cross-edges', err);
       }

@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import db from '@/lib/db';
+import { CitationRepository } from '@/domain/repositories/CitationRepository';
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
@@ -10,8 +10,7 @@ export async function GET(request: Request) {
   }
 
   try {
-    const stmt = db.prepare('SELECT sourceId as source, targetId as target FROM citations WHERE collectionId = ?');
-    const links = stmt.all(collectionId);
+    const links = CitationRepository.getLinksForCollection(collectionId);
     return NextResponse.json(links);
   } catch (error: any) {
     console.error('Database GET links error:', error);

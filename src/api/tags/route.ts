@@ -1,11 +1,9 @@
 import { NextResponse } from 'next/server';
-import db from '@/lib/db';
-import crypto from 'crypto';
+import { TagRepository } from '@/domain/repositories/TagRepository';
 
 export async function GET() {
   try {
-    const stmt = db.prepare('SELECT * FROM tags ORDER BY weight DESC, name ASC');
-    const tags = stmt.all();
+    const tags = TagRepository.getAllTags();
     return NextResponse.json(tags);
   } catch (error: any) {
     console.error('Database GET tags error:', error);
@@ -22,15 +20,9 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Name is required' }, { status: 400 });
     }
 
-    const id = crypto.randomUUID();
-    const insertStmt = db.prepare(`
-      INSERT INTO tags (id, name, color, weight)
-      VALUES (?, ?, ?, ?)
-    `);
+    const tag = TagRepository.createTag(name, color, weight);
 
-    insertStmt.run(id, name, color || '#888888', weight || 0);
-
-    return NextResponse.json({ message: 'Tag created successfully', tag: { id, name, color: color || '#888888', weight: weight || 0 } });
+    return NextResponse.json({ message: 'Tag created successfully', tag });
   } catch (error: any) {
     console.error('Database POST tags error:', error);
     // Handle unique constraint error

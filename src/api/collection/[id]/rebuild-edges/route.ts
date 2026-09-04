@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
-import db from '@/lib/db';
 import { logS2ApiCall } from '@/lib/semanticscholar';
+import { PaperRepository } from '@/domain/repositories/PaperRepository';
+import { CitationRepository } from '@/domain/repositories/CitationRepository';
 
 const S2_API_URL = 'https://api.semanticscholar.org/graph/v1';
 const OPENALEX_API_URL = 'https://api.openalex.org';
@@ -19,14 +20,13 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     const collectionId = resolvedParams.id;
     
     // 1. Get all papers in the collection
-    const papersStmt = db.prepare('SELECT id FROM papers WHERE collectionId = ?');
-    const existingPapers = papersStmt.all(collectionId) as { id: string }[];
+    const existingPapers = PaperRepository.getPapersForCollection(collectionId);
     
     if (!existingPapers || existingPapers.length === 0) {
       return NextResponse.json({ success: true, addedEdges: 0 });
     }
 
-    const existingIdsSet = new Set(existingPapers.map(p => p.id));
+    const existingIdsSet = new Set(existingPapers.map((p: any) => p.id));
     
     const s2Ids: string[] = [];
     const oaIds: string[] = [];
@@ -108,22 +108,8 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
 
     // 4. Insert all found edges into the database
     if (newEdges.length > 0) {
-      const insertLinkStmt = db.prepare(`
-        INSERT OR IGNORE INTO citations (collectionId, sourceId, targetId)
-        VALUES (?, ?, ?)
-      `);
-      
-      let added = 0;
-      db.transaction(() => {
-        for (const edge of newEdges) {
-          const res = insertLinkStmt.run(collectionId, edge.source, edge.target);
-          if (res.changes > 0) {
-            added++;
-          }
-        }
-      })();
-      
-      return NextResponse.json({ success: true, addedEdges: added });
+      CitationRepository.addLinks(collectionId, newEdges);
+      return NextResponse.json({ success: true, addedEdges: newEdges.length });
     }
 
     return NextResponse.json({ success: true, addedEdges: 0 });
