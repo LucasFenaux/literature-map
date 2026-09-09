@@ -5,9 +5,9 @@ import { PaperRepository } from '@/domain/repositories/PaperRepository';
 import { QueueRepository } from '@/domain/repositories/QueueRepository';
 import { CitationRepository } from '@/domain/repositories/CitationRepository';
 
-const queueRetry = (paperId: string, type: 'citations' | 'references' | 'both') => {
+const queueRetry = (paperId: string, type: 'citations' | 'references' | 'both', collectionId?: string) => {
   try {
-    QueueRepository.addQueueItem(paperId, type);
+    QueueRepository.addQueueItem(paperId, type, collectionId);
   } catch (err) {
     console.error('Failed to queue retry', err);
   }
@@ -19,6 +19,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     const { id } = resolvedParams;
     const { searchParams } = new URL(request.url);
     const type = (searchParams.get('type') || 'both') as 'citations' | 'references' | 'both';
+    const collectionId = searchParams.get('collectionId') || undefined;
 
     let citations: any[] = [];
     let references: any[] = [];
@@ -35,7 +36,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
         try {
           targetS2Id = await getS2PaperByTitle(titleToSearch);
         } catch (e: any) {
-          if (e.message === 'S2_RATE_LIMIT' || e.message === 'RATE_LIMIT') queueRetry(id, type);
+          if (e.message === 'S2_RATE_LIMIT' || e.message === 'RATE_LIMIT') queueRetry(id, type, collectionId);
         }
       }
     }
@@ -49,7 +50,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
         usedS2 = true;
       } catch (e: any) {
         if (e.message === 'S2_RATE_LIMIT' || e.message === 'RATE_LIMIT') {
-          queueRetry(id, type);
+          queueRetry(id, type, collectionId);
         } else {
           throw e;
         }
@@ -59,14 +60,30 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     // If we didn't use S2 (no ID found or no key), or S2 failed but we didn't throw, try OpenAlex natively
     if (!usedS2 && !process.env.SEMANTIC_SCHOLAR_API_KEY) {
       if (type === 'citations' || type === 'both') {
-        citations = await getCitations(id, 200); 
+        try {
+          citations = await getCitations(id, 200); 
+        } catch (e: any) {
+          if (e.message === 'RATE_LIMIT' || e.message === 'S2_RATE_LIMIT') {
+            queueRetry(id, 'citations', collectionId);
+          } else {
+            throw e;
+          }
+        }
       }
       
       if (type === 'references' || type === 'both') {
-        if (!paper) paper = await getPaperDetails(id);
-        const referenceIds = paper?.referencedWorks?.slice(0, 200) || [];
-        if (referenceIds.length > 0) {
-          references = await getWorksByIds(referenceIds);
+        try {
+          if (!paper) paper = await getPaperDetails(id);
+          const referenceIds = paper?.referencedWorks?.slice(0, 200) || [];
+          if (referenceIds.length > 0) {
+            references = await getWorksByIds(referenceIds);
+          }
+        } catch (e: any) {
+          if (e.message === 'RATE_LIMIT' || e.message === 'S2_RATE_LIMIT') {
+            queueRetry(id, 'references', collectionId);
+          } else {
+            throw e;
+          }
         }
       }
       
@@ -75,7 +92,13 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
         const localPaper = PaperRepository.getPaperById(id);
         let titleToSearch = localPaper?.title;
         if (!titleToSearch) {
-          if (!paper) paper = await getPaperDetails(id);
+          try {
+            if (!paper) paper = await getPaperDetails(id);
+          } catch (e: any) {
+            if (e.message === 'S2_RATE_LIMIT' || e.message === 'RATE_LIMIT') {
+              queueRetry(id, 'citations', collectionId);
+            }
+          }
           if (paper && paper.title) titleToSearch = paper.title;
         }
 
@@ -84,7 +107,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
             const fallbackS2Id = await getS2PaperByTitle(titleToSearch);
             if (fallbackS2Id) citations = await getS2Citations(fallbackS2Id);
           } catch (e: any) {
-            if (e.message === 'S2_RATE_LIMIT' || e.message === 'RATE_LIMIT') queueRetry(id, 'citations');
+            if (e.message === 'S2_RATE_LIMIT' || e.message === 'RATE_LIMIT') queueRetry(id, 'citations', collectionId);
           }
         }
       }
@@ -93,7 +116,13 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
         const localPaper = PaperRepository.getPaperById(id);
         let titleToSearch = localPaper?.title;
         if (!titleToSearch) {
-          if (!paper) paper = await getPaperDetails(id);
+          try {
+            if (!paper) paper = await getPaperDetails(id);
+          } catch (e: any) {
+            if (e.message === 'S2_RATE_LIMIT' || e.message === 'RATE_LIMIT') {
+              queueRetry(id, 'references', collectionId);
+            }
+          }
           if (paper && paper.title) titleToSearch = paper.title;
         }
 
@@ -102,22 +131,20 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
             const fallbackS2Id = await getS2PaperByTitle(titleToSearch);
             if (fallbackS2Id) references = await getS2References(fallbackS2Id);
           } catch (e: any) {
-            if (e.message === 'S2_RATE_LIMIT' || e.message === 'RATE_LIMIT') queueRetry(id, 'references');
+            if (e.message === 'S2_RATE_LIMIT' || e.message === 'RATE_LIMIT') queueRetry(id, 'references', collectionId);
           }
         }
       }
     }
-    
-    const collectionId = searchParams.get('collectionId');
 
     const savePapersAndLinks = (papers: any[], isCitation: boolean) => {
       if (!collectionId) return;
       
+      PaperRepository.addPapers(papers, collectionId, 'recommended');
+
       const newLinks = [];
 
       for (const p of papers) {
-        PaperRepository.addPaper(p, collectionId, 'recommended');
-        
         const source = isCitation ? p.id : id;
         const target = isCitation ? id : p.id;
         newLinks.push({ source, target });

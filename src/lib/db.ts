@@ -71,6 +71,7 @@ export function getDb() {
         paperId TEXT NOT NULL,
         type TEXT NOT NULL,
         status TEXT DEFAULT 'pending',
+        collectionId TEXT,
         createdAt DATETIME DEFAULT CURRENT_TIMESTAMP
       );
 
@@ -109,6 +110,12 @@ export function getDb() {
     try {
       db.exec(`ALTER TABLE tags ADD COLUMN weight INTEGER DEFAULT 0;`);
     } catch (error) {
+      // Column likely already exists
+    }
+
+    try {
+      db.exec("ALTER TABLE retry_queue ADD COLUMN collectionId TEXT;");
+    } catch {
       // Column likely already exists
     }
   }

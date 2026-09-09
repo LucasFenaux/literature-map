@@ -7,6 +7,9 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test tests/**/*.test.ts",
+    "test:watch": "tsx --test --watch tests/**/*.test.ts",
     "build:server": "esbuild server/index.ts --bundle --platform=node --target=node20 --external:better-sqlite3 --outdir=dist",
     "build:exe": "npm run build && npm run build:server && npx pkg . --target node18-macos-x64,node18-linux-x64,node18-win-x64 --out-path release"
   },

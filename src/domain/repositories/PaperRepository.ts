@@ -37,38 +37,66 @@ export class PaperRepository {
     db.prepare('UPDATE papers SET status = ?, localTags = ?, notes = ? WHERE id = ? AND collectionId = ?').run(status, localTags, notes, id, collectionId);
   }
 
-  static addPaper(paper: any, collectionId: string, status: string = 'seed'): void {
+  static addPapers(
+    papers: Array<{
+      id: string;
+      doi?: string;
+      title: string;
+      abstract?: string;
+      authors?: any;
+      year?: number;
+      publicationDate?: string;
+      citationCount?: number;
+      url?: string;
+      venue?: string;
+      [key: string]: any;
+    }>,
+    collectionId: string,
+    status: string = 'recommended'
+  ): void {
+    if (!papers || papers.length === 0) return;
+
     const insertStmt = db.prepare(`
-      INSERT INTO papers (id, collectionId, doi, title, abstract, authors, year, publicationDate, citationCount, url, venue, status, localTags, notes)
+      INSERT OR IGNORE INTO papers (id, collectionId, doi, title, abstract, authors, year, publicationDate, citationCount, url, venue, status, localTags, notes)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', '')
     `);
 
-    let authorsJson = '[]';
-    if (Array.isArray(paper.authors)) {
-      authorsJson = JSON.stringify(paper.authors);
-    } else if (typeof paper.authors === 'string') {
-      try {
-        JSON.parse(paper.authors);
-        authorsJson = paper.authors;
-      } catch {
-        authorsJson = JSON.stringify([paper.authors]);
-      }
-    }
+    const transaction = db.transaction((batch: any[]) => {
+      for (const paper of batch) {
+        let authorsJson = '[]';
+        if (Array.isArray(paper.authors)) {
+          authorsJson = JSON.stringify(paper.authors);
+        } else if (typeof paper.authors === 'string') {
+          try {
+            JSON.parse(paper.authors);
+            authorsJson = paper.authors;
+          } catch {
+            authorsJson = JSON.stringify([paper.authors]);
+          }
+        }
 
-    insertStmt.run(
-      paper.id,
-      collectionId,
-      paper.doi || null,
-      paper.title,
-      paper.abstract || '',
-      authorsJson,
-      paper.year || new Date().getFullYear(),
-      paper.publicationDate || null,
-      paper.citationCount || 0,
-      paper.url || '',
-      paper.venue || '',
-      status
-    );
+        insertStmt.run(
+          paper.id,
+          collectionId,
+          paper.doi || null,
+          paper.title || '',
+          paper.abstract || '',
+          authorsJson,
+          paper.year || new Date().getFullYear(),
+          paper.publicationDate || null,
+          paper.citationCount || 0,
+          paper.url || '',
+          paper.venue || '',
+          status
+        );
+      }
+    });
+
+    transaction(papers);
+  }
+
+  static addPaper(paper: any, collectionId: string, status: string = 'seed'): void {
+    PaperRepository.addPapers([paper], collectionId, status);
   }
 
   static getBasicPapersForCollectionByStatus(collectionId: string, status: string): { id: string, title: string }[] {
