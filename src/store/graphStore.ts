@@ -401,35 +401,44 @@ export const useGraphStore = create<GraphState>()(
   },
 
   addSeedPaper: async (paper) => {
-    const { graphData, activeCollectionId } = get();
+    const { graphData, activeCollectionId, edgeFilter, selectedNode } = get();
     if (!activeCollectionId) return;
 
     const existingNodeIndex = graphData.nodes.findIndex(n => n.id === paper.id);
-    
-    if (existingNodeIndex >= 0) {
-      if (graphData.nodes[existingNodeIndex].status === 'seed') return;
-      
-      const newNodes = [...graphData.nodes];
-      newNodes[existingNodeIndex] = { ...newNodes[existingNodeIndex], status: 'seed' };
-      const { nodes: sizedNodes, threshold } = calculateSizes(newNodes, graphData.links, get().topNLimit || 20);
-      set({
-        graphData: {
-          nodes: sizedNodes,
-          links: graphData.links,
-        },
-        edgeFilter: Math.max(get().edgeFilter, threshold)
-      });
-    } else {
-      const newNodes = [...graphData.nodes, { ...paper, status: 'seed' } as GraphNode];
-      const { nodes: sizedNodes, threshold } = calculateSizes(newNodes, graphData.links, get().topNLimit || 20);
-      set({
-        graphData: {
-          nodes: sizedNodes,
-          links: graphData.links,
-        },
-        edgeFilter: Math.max(get().edgeFilter, threshold)
-      });
+    if (existingNodeIndex >= 0 && graphData.nodes[existingNodeIndex].status === 'seed') {
+      return;
     }
+
+    // Record previous status for targeted delta rollback
+    const previousStatus = existingNodeIndex >= 0 ? graphData.nodes[existingNodeIndex].status : null;
+    const previousEdgeFilter = edgeFilter;
+
+    // Apply optimistic UI update with fully cloned node objects
+    const newNodes: GraphNode[] = graphData.nodes.map(n => ({ ...n }));
+    if (existingNodeIndex >= 0) {
+      newNodes[existingNodeIndex] = { ...newNodes[existingNodeIndex], status: 'seed' };
+    } else {
+      newNodes.push({ ...paper, status: 'seed' } as GraphNode);
+    }
+
+    const { nodes: sizedNodes, threshold } = calculateSizes(newNodes, graphData.links, get().topNLimit || 20);
+    const optimisticEdgeFilter = Math.max(edgeFilter, threshold);
+
+    let optimisticSelectedNode = selectedNode;
+    if (selectedNode?.id === paper.id) {
+      optimisticSelectedNode = sizedNodes.find(n => n.id === paper.id) || { ...selectedNode, status: 'seed' };
+    } else if (selectedNode) {
+      optimisticSelectedNode = sizedNodes.find(n => n.id === selectedNode.id) || selectedNode;
+    }
+
+    set({
+      graphData: {
+        nodes: sizedNodes,
+        links: graphData.links,
+      },
+      edgeFilter: optimisticEdgeFilter,
+      selectedNode: optimisticSelectedNode,
+    });
 
     try {
       const res = await fetch('/api/collection', {
@@ -437,41 +446,182 @@ export const useGraphStore = create<GraphState>()(
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ...paper, status: 'seed', collectionId: activeCollectionId })
       });
+
+      if (!res.ok) {
+        throw new Error(`Failed to add seed paper: ${res.status} ${res.statusText}`);
+      }
       // We deliberately do not call loadCollectionGraph here,
       // because we already optimistically updated the UI graphData above.
       // Calling loadCollectionGraph replaces the entire nodes array and forces
       // React Force Graph to freeze the main thread resetting the entire physics simulation.
     } catch (error) {
       console.error('Failed to add seed to DB', error);
+
+      // Delta Rollback: inspect current store state to avoid clobbering concurrent operations
+      const current = get();
+
+      let rolledBackNodes: GraphNode[];
+      if (previousStatus === null) {
+        // Paper was newly added; remove ONLY this paper
+        rolledBackNodes = current.graphData.nodes
+          .filter(n => n.id !== paper.id)
+          .map(n => ({ ...n }));
+      } else {
+        // Paper existed before; revert ONLY this paper's status back to previousStatus
+        rolledBackNodes = current.graphData.nodes.map(n =>
+          n.id === paper.id ? { ...n, status: previousStatus } : { ...n }
+        );
+      }
+
+      const { nodes: sizedNodes, threshold } = calculateSizes(
+        rolledBackNodes,
+        current.graphData.links,
+        current.topNLimit || 20
+      );
+
+      // Safely update selectedNode without leaking stale references or clobbering concurrent selections
+      let rolledBackSelectedNode = current.selectedNode;
+      if (current.selectedNode?.id === paper.id) {
+        if (previousStatus === null) {
+          rolledBackSelectedNode = null;
+        } else {
+          rolledBackSelectedNode = sizedNodes.find(n => n.id === paper.id) || null;
+        }
+      } else if (current.selectedNode) {
+        rolledBackSelectedNode = sizedNodes.find(n => n.id === current.selectedNode!.id) || current.selectedNode;
+      }
+
+      const edgeFilterToRestore = (current.edgeFilter === optimisticEdgeFilter)
+        ? previousEdgeFilter
+        : current.edgeFilter;
+
+      set({
+        graphData: {
+          nodes: sizedNodes,
+          links: current.graphData.links,
+        },
+        edgeFilter: Math.max(edgeFilterToRestore, threshold),
+        selectedNode: rolledBackSelectedNode,
+      });
     }
   },
 
   removeNode: async (id: string) => {
-    const { activeCollectionId, graphData, selectedNode } = get();
+    const { activeCollectionId, graphData, selectedNode, edgeFilter, focusedNodeId } = get();
     if (!activeCollectionId) return;
 
-    try {
-      await fetch(`/api/collection/${id}?collectionId=${activeCollectionId}`, {
-        method: 'DELETE'
-      });
-    } catch (err) {
-      console.error('Failed to remove node from database', err);
-    }
+    // Record removed node and incident links for targeted delta rollback
+    const nodeToRemove = graphData.nodes.find(n => n.id === id);
+    const removedNode = nodeToRemove ? { ...nodeToRemove } : null;
+    const removedLinks = graphData.links.filter(l => {
+      const sourceId = typeof l.source === 'string' ? l.source : (l.source as any).id;
+      const targetId = typeof l.target === 'string' ? l.target : (l.target as any).id;
+      return sourceId === id || targetId === id;
+    });
 
-    // Filter out the node and any links connected to it
-    const newNodes = graphData.nodes.filter(n => n.id !== id);
+    const previousEdgeFilter = edgeFilter;
+    const previousSelectedNode = selectedNode ? { ...selectedNode } : null;
+    const previousFocusedNodeId = focusedNodeId;
+
+    // Optimistically filter out node and any connected links with cloned node objects
+    const newNodes = graphData.nodes
+      .filter(n => n.id !== id)
+      .map(n => ({ ...n }));
     const newLinks = graphData.links.filter(l => {
       const sourceId = typeof l.source === 'string' ? l.source : (l.source as any).id;
       const targetId = typeof l.target === 'string' ? l.target : (l.target as any).id;
       return sourceId !== id && targetId !== id;
     });
+
     const { nodes: sizedNodes, threshold } = calculateSizes(newNodes, newLinks, get().topNLimit || 20);
+    const optimisticEdgeFilter = Math.max(edgeFilter, threshold);
+
+    let optimisticSelectedNode = selectedNode?.id === id ? null : selectedNode;
+    if (optimisticSelectedNode) {
+      optimisticSelectedNode = sizedNodes.find(n => n.id === optimisticSelectedNode!.id) || optimisticSelectedNode;
+    }
 
     set({ 
       graphData: { nodes: sizedNodes, links: newLinks },
-      edgeFilter: Math.max(get().edgeFilter, threshold),
-      selectedNode: selectedNode?.id === id ? null : selectedNode
+      edgeFilter: optimisticEdgeFilter,
+      selectedNode: optimisticSelectedNode,
+      focusedNodeId: focusedNodeId === id ? null : focusedNodeId
     });
+
+    try {
+      const res = await fetch(`/api/collection/${id}?collectionId=${activeCollectionId}`, {
+        method: 'DELETE'
+      });
+
+      if (!res.ok) {
+        throw new Error(`Failed to remove node from database: ${res.status} ${res.statusText}`);
+      }
+    } catch (err) {
+      console.error('Failed to remove node from database', err);
+
+      // Delta Rollback: inspect current store state to avoid clobbering concurrent operations
+      const current = get();
+
+      // Re-insert removed node if not present in current graph
+      let rolledBackNodes: GraphNode[] = current.graphData.nodes.map(n => ({ ...n }));
+      if (removedNode && !rolledBackNodes.some(n => n.id === id)) {
+        rolledBackNodes.push({ ...removedNode });
+      }
+
+      // Re-insert incident links if both endpoint nodes exist in rolledBackNodes
+      let rolledBackLinks = [...current.graphData.links];
+      if (removedLinks.length > 0) {
+        const existingLinkKeys = new Set(rolledBackLinks.map(l => {
+          const s = typeof l.source === 'string' ? l.source : (l.source as any).id;
+          const t = typeof l.target === 'string' ? l.target : (l.target as any).id;
+          return `${s}|${t}`;
+        }));
+
+        for (const l of removedLinks) {
+          const s = typeof l.source === 'string' ? l.source : (l.source as any).id;
+          const t = typeof l.target === 'string' ? l.target : (l.target as any).id;
+          const sExists = rolledBackNodes.some(n => n.id === s);
+          const tExists = rolledBackNodes.some(n => n.id === t);
+          if (sExists && tExists && !existingLinkKeys.has(`${s}|${t}`)) {
+            rolledBackLinks.push({ source: s, target: t });
+            existingLinkKeys.add(`${s}|${t}`);
+          }
+        }
+      }
+
+      const { nodes: sizedNodes, threshold } = calculateSizes(
+        rolledBackNodes,
+        rolledBackLinks,
+        current.topNLimit || 20
+      );
+
+      // Safely restore selectedNode if it was cleared and matches id
+      let rolledBackSelectedNode = current.selectedNode;
+      if (current.selectedNode === null) {
+        if (previousSelectedNode && previousSelectedNode.id === id) {
+          rolledBackSelectedNode = sizedNodes.find(n => n.id === id) || { ...previousSelectedNode };
+        }
+      } else {
+        rolledBackSelectedNode = sizedNodes.find(n => n.id === current.selectedNode!.id) || current.selectedNode;
+      }
+
+      // Safely restore focusedNodeId if it was cleared and matches id
+      let rolledBackFocusedNodeId = current.focusedNodeId;
+      if (current.focusedNodeId === null && previousFocusedNodeId === id) {
+        rolledBackFocusedNodeId = previousFocusedNodeId;
+      }
+
+      const edgeFilterToRestore = (current.edgeFilter === optimisticEdgeFilter)
+        ? previousEdgeFilter
+        : current.edgeFilter;
+
+      set({ 
+        graphData: { nodes: sizedNodes, links: rolledBackLinks },
+        edgeFilter: Math.max(edgeFilterToRestore, threshold),
+        selectedNode: rolledBackSelectedNode,
+        focusedNodeId: rolledBackFocusedNodeId
+      });
+    }
   },
   
   expandNode: async (id: string, type = 'both') => {

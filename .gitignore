@@ -61,3 +61,5 @@ screenlog.0
 AGENTS.md
 CLAUDE.md
 data/
+.agents
+ORIGINAL_REQUEST.md

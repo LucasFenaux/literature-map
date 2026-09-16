@@ -324,8 +324,14 @@ function PaperPopup({ node, onClose, isRightPanelCollapsed, panelWidth }: { node
               try {
                 const res = await fetch(`/api/pdf/${node.id}`, { method: 'POST' });
                 if (!res.ok) {
-                  const err = await res.json();
-                  throw new Error(err.error || 'Failed to download PDF');
+                  const contentType = res.headers.get("content-type");
+                  if (contentType && contentType.indexOf("application/json") !== -1) {
+                    const err = await res.json();
+                    throw new Error(err.error || 'Failed to download PDF');
+                  } else {
+                    const text = await res.text();
+                    throw new Error(`Failed to download PDF: ${res.status} - ${text.substring(0, 50)}`);
+                  }
                 }
                 setPdfDownloaded(true);
                 window.open(`/api/pdf/file/${node.id}`, '_blank');

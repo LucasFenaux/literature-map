@@ -1,6 +1,10 @@
 import db from '@/lib/db';
 import { Paper } from '@/lib/openalex';
 
+export interface UpsertPaperResult {
+  action: 'inserted' | 'updated' | 'unchanged';
+}
+
 export class PaperRepository {
   static getPapersForCollection(collectionId: string): any[] {
     const stmt = db.prepare('SELECT * FROM papers WHERE collectionId = ? ORDER BY createdAt DESC');
@@ -97,6 +101,87 @@ export class PaperRepository {
 
   static addPaper(paper: any, collectionId: string, status: string = 'seed'): void {
     PaperRepository.addPapers([paper], collectionId, status);
+  }
+
+  static upsertPaper(
+    paper: {
+      id: string;
+      doi?: string;
+      title?: string;
+      abstract?: string;
+      authors?: unknown;
+      year?: number;
+      publicationDate?: string;
+      citationCount?: number;
+      url?: string;
+      venue?: string;
+      localTags?: unknown;
+      notes?: string;
+      [key: string]: unknown;
+    },
+    collectionId: string,
+    status: string = 'seed'
+  ): UpsertPaperResult {
+    let authorsJson = '[]';
+    if (Array.isArray(paper.authors)) {
+      authorsJson = JSON.stringify(paper.authors);
+    } else if (typeof paper.authors === 'string') {
+      try {
+        JSON.parse(paper.authors);
+        authorsJson = paper.authors;
+      } catch {
+        authorsJson = JSON.stringify([paper.authors]);
+      }
+    }
+
+    let localTagsStr = '[]';
+    if (paper.localTags) {
+      localTagsStr = typeof paper.localTags === 'string' ? paper.localTags : JSON.stringify(paper.localTags);
+    }
+    const notesStr = paper.notes || '';
+
+    const tx = db.transaction(() => {
+      const insertStmt = db.prepare(`
+        INSERT OR IGNORE INTO papers (id, collectionId, doi, title, abstract, authors, year, publicationDate, citationCount, url, venue, status, localTags, notes)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+
+      const info = insertStmt.run(
+        paper.id,
+        collectionId,
+        paper.doi || null,
+        paper.title || '',
+        paper.abstract || '',
+        authorsJson,
+        paper.year || new Date().getFullYear(),
+        paper.publicationDate || null,
+        paper.citationCount || 0,
+        paper.url || '',
+        paper.venue || '',
+        status,
+        localTagsStr,
+        notesStr
+      );
+
+      if (info.changes > 0) {
+        return { action: 'inserted' as const };
+      }
+
+      // If ignored, row already exists for (id, collectionId)
+      const current = db.prepare('SELECT status FROM papers WHERE id = ? AND collectionId = ?').get(paper.id, collectionId) as { status: string } | undefined;
+      if (current && current.status !== status) {
+        // Protect curated statuses ('seed' / 'collection') from being demoted to 'recommended'
+        if ((current.status === 'seed' || current.status === 'collection') && status === 'recommended') {
+          return { action: 'unchanged' as const };
+        }
+        db.prepare('UPDATE papers SET status = ? WHERE id = ? AND collectionId = ?').run(status, paper.id, collectionId);
+        return { action: 'updated' as const };
+      }
+
+      return { action: 'unchanged' as const };
+    });
+
+    return tx();
   }
 
   static getBasicPapersForCollectionByStatus(collectionId: string, status: string): { id: string, title: string }[] {

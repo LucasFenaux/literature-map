@@ -1,19 +1,27 @@
 import { CacheRepository } from '@/domain/repositories/CacheRepository';
 
 export class HttpClient {
-  static async fetchWithBackoff(url: string, headers: HeadersInit, cacheFreshnessDays: number, retries = 4, cacheCallback?: (cached: boolean) => void): Promise<any> {
+  static async fetchWithBackoff(
+    url: string,
+    headers: HeadersInit,
+    cacheFreshnessDays: number,
+    retries = 4,
+    cacheCallback?: (cached: boolean) => void,
+    options?: RequestInit
+  ): Promise<any> {
     const CACHE_TTL_MS = cacheFreshnessDays * 24 * 60 * 60 * 1000;
     
     // Check cache
+    const cacheKey = options?.body ? `${url}#${options.body}` : url;
     try {
-      const cached = CacheRepository.get(url);
+      const cached = CacheRepository.get(cacheKey);
       if (cached) {
         const ts = new Date(cached.timestamp + 'Z').getTime();
         if (Date.now() - ts < CACHE_TTL_MS) {
           if (cacheCallback) cacheCallback(true);
           const parsed = JSON.parse(cached.data);
           if (parsed.error === 404) return null;
-          return { ok: true, json: async () => parsed };
+          return { ok: true, status: 200, json: async () => parsed };
         }
       }
     } catch (e) {
@@ -21,17 +29,20 @@ export class HttpClient {
     }
   
     let attempt = 0;
-    const baseDelay = 1000;
+    const baseDelay = process.env.NODE_ENV === 'test' ? 10 : 1000;
     
     while (attempt < retries) {
-      const res = await fetch(url, { headers });
+      const fetchHeaders = options?.headers
+        ? { ...headers, ...(options.headers as any) }
+        : headers;
+      const res = await fetch(url, { ...options, headers: fetchHeaders });
       if (res.status !== 429) {
         if (cacheCallback) cacheCallback(false);
         if (res.ok || res.status === 404 || res.status === 400) {
           const cloned = res.clone();
           const data = await cloned.text();
           try {
-            CacheRepository.set(url, data);
+            CacheRepository.set(cacheKey, data);
           } catch (e) {
             console.error('Cache write error', e);
           }
@@ -45,7 +56,8 @@ export class HttpClient {
       if (attempt >= retries) {
         throw new Error('RATE_LIMIT');
       }
-      const delayMs = Math.min(baseDelay * Math.pow(2, attempt) + Math.random() * 500, 5000);
+      const jitter = process.env.NODE_ENV === 'test' ? Math.random() * 5 : Math.random() * 500;
+      const delayMs = Math.min(baseDelay * Math.pow(2, attempt) + jitter, 5000);
       await new Promise(r => setTimeout(r, delayMs));
     }
     throw new Error('RATE_LIMIT');

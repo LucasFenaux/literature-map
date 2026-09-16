@@ -9,9 +9,10 @@ export async function GET(request: Request) {
   try {
     const papers = PaperRepository.getPapersForCollection(collectionId);
     return NextResponse.json(papers);
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('Database GET error:', error);
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    const message = error instanceof Error ? error.message : 'Unknown database error';
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }
 
@@ -24,27 +25,42 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Paper ID and collectionId are required' }, { status: 400 });
     }
 
-    const existingStatus = PaperRepository.getPaperStatus(id, collectionId);
-    
-    if (existingStatus) {
-      if (existingStatus !== status) {
-        PaperRepository.updatePaperStatus(id, collectionId, status);
-        return NextResponse.json({ message: 'Paper status updated' }, { status: 200 });
-      }
-      return NextResponse.json({ message: 'Paper already in collection' }, { status: 200 });
-    }
-
     const paper = body;
     
     if (!paper || !paper.title) {
+      const existingStatus = PaperRepository.getPaperStatus(id, collectionId);
+      if (existingStatus) {
+        if (existingStatus !== status) {
+          PaperRepository.updatePaperStatus(id, collectionId, status);
+          return NextResponse.json({ success: true, message: 'Paper status updated' }, { status: 200 });
+        }
+        return NextResponse.json({ success: true, message: 'Paper already in collection' }, { status: 200 });
+      }
       return NextResponse.json({ error: 'Full paper details are required' }, { status: 400 });
     }
 
-    PaperRepository.addPaper(paper, collectionId, status);
+    const result = PaperRepository.upsertPaper(paper, collectionId, status);
 
-    return NextResponse.json({ message: 'Paper added successfully', paper });
-  } catch (error: any) {
+    if (result.action === 'inserted') {
+      return NextResponse.json({ success: true, message: 'Paper added successfully', paper }, { status: 200 });
+    } else if (result.action === 'updated') {
+      return NextResponse.json({ success: true, message: 'Paper status updated' }, { status: 200 });
+    } else {
+      return NextResponse.json({ success: true, message: 'Paper already in collection' }, { status: 200 });
+    }
+  } catch (error: unknown) {
+    const err = error as { code?: string; message?: string };
+    if (
+      err.code === 'SQLITE_CONSTRAINT_UNIQUE' ||
+      err.code === 'SQLITE_CONSTRAINT_PRIMARYKEY' ||
+      err.code === 'SQLITE_CONSTRAINT' ||
+      (err.message && /UNIQUE constraint failed/i.test(err.message)) ||
+      (err.message && /PRIMARY KEY constraint failed/i.test(err.message))
+    ) {
+      return NextResponse.json({ success: true, message: 'Paper already in collection' }, { status: 200 });
+    }
     console.error('Database POST error:', error);
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    const message = err.message || 'Unknown database error';
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }

@@ -2,6 +2,8 @@ import { NextResponse } from 'next/server';
 import { logS2ApiCall } from '@/lib/semanticscholar';
 import { PaperRepository } from '@/domain/repositories/PaperRepository';
 import { CitationRepository } from '@/domain/repositories/CitationRepository';
+import { HttpClient } from '@/domain/adapters/HttpClient';
+import { EnvConfigAdapter } from '@/domain/repositories/SettingsRepository';
 
 const S2_API_URL = 'https://api.semanticscholar.org/graph/v1';
 const OPENALEX_API_URL = 'https://api.openalex.org';
@@ -41,20 +43,30 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
 
     const newEdges: { source: string, target: string }[] = [];
 
+    const envConfig = EnvConfigAdapter.getEnvConfig();
+    let cacheFreshnessDays = parseInt(envConfig.cacheFreshnessReferences, 10);
+    if (isNaN(cacheFreshnessDays)) cacheFreshnessDays = 30;
+
     // 2. Fetch references for S2 IDs in batches of 500
     if (s2Ids.length > 0) {
       const BATCH_SIZE = 500;
       for (let i = 0; i < s2Ids.length; i += BATCH_SIZE) {
         const batch = s2Ids.slice(i, i + BATCH_SIZE);
         try {
-          const res = await fetch(`${S2_API_URL}/paper/batch?fields=paperId,references.paperId`, {
-            method: 'POST',
-            headers: getS2Headers(),
-            body: JSON.stringify({ ids: batch })
-          });
+          const body = JSON.stringify({ ids: batch });
+          const res = await HttpClient.fetchWithBackoff(
+            `${S2_API_URL}/paper/batch?fields=paperId,references.paperId`,
+            getS2Headers(),
+            cacheFreshnessDays,
+            4,
+            (cached) => logS2ApiCall('batch:paper/batch?fields=paperId,references.paperId', cached),
+            {
+              method: 'POST',
+              body
+            }
+          );
           
-          if (res.ok) {
-            logS2ApiCall(`batch:paper/batch?fields=paperId,references.paperId`, false);
+          if (res && res.ok) {
             const data = await res.json();
             for (const item of data) {
               if (!item || !item.paperId) continue;
@@ -70,7 +82,11 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
               }
             }
           }
-        } catch (err) {
+        } catch (err: any) {
+          if (err.message === 'RATE_LIMIT') {
+            console.warn('S2 batch hit rate limit after retries, stopping further S2 requests');
+            break;
+          }
           console.error('Failed to fetch S2 batch', err);
         }
       }
@@ -83,8 +99,14 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
         const batch = oaIds.slice(i, i + BATCH_SIZE);
         const filterStr = batch.join('|');
         try {
-          const res = await fetch(`${OPENALEX_API_URL}/works?filter=openalex_id:${filterStr}&per-page=50&select=id,referenced_works`);
-          if (res.ok) {
+          const url = `${OPENALEX_API_URL}/works?filter=openalex_id:${filterStr}&per-page=50&select=id,referenced_works`;
+          const res = await HttpClient.fetchWithBackoff(
+            url,
+            {},
+            cacheFreshnessDays,
+            4
+          );
+          if (res && res.ok) {
             const data = await res.json();
             if (data.results && Array.isArray(data.results)) {
               for (const work of data.results) {
@@ -100,7 +122,11 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
               }
             }
           }
-        } catch (err) {
+        } catch (err: any) {
+          if (err.message === 'RATE_LIMIT') {
+            console.warn('OpenAlex batch hit rate limit after retries, stopping further OpenAlex requests');
+            break;
+          }
           console.error('Failed to fetch OpenAlex batch', err);
         }
       }
